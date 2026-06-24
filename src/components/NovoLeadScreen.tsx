@@ -9,8 +9,11 @@ import {
   StatusBar,
   KeyboardAvoidingView,
   Platform,
+  Alert,
+  ActivityIndicator,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
+import { criarLeadIFS } from "./ifsService";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -335,6 +338,7 @@ const TABS: { key: Tab; label: string }[] = [
 export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "novo" }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>("diversos");
   const isEditing = mode === "editar";
+  const [saving, setSaving] = useState(false);
   const [data, setDataState] = useState<LeadData>({
     cnpj: "",
     nomeEmpresa: "",
@@ -356,6 +360,52 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
 
   const setData = (partial: Partial<LeadData>) =>
     setDataState((prev) => ({ ...prev, ...partial }));
+
+  const handleSave = async () => {
+    if (!data.nomeEmpresa?.trim()) {
+      Alert.alert("Campo obrigatório", "Informe o Nome da Empresa antes de salvar.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const result = await criarLeadIFS({
+        nomeEmpresa:   data.nomeEmpresa,
+        nomeContato:   data.nomeContato,
+        cnpj:          data.cnpj,
+        idioma:        data.idioma,
+        pais:          data.pais,
+        origem:        data.origem,
+        mercado:       data.mercado,
+        segmento:      data.segmento,
+        potencial:     data.potencial,
+        dataCriacao:   data.dataCriacao,
+        notasEvento:   data.notasEvento,
+        leadDuplicado: data.leadDuplicado,
+      });
+
+      if (result.success) {
+        Alert.alert(
+          "✅ Lead Criado!",
+          `Lead "${data.nomeEmpresa}" sincronizado com o IFS.${result.leadId ? "\nID: " + result.leadId : ""}`,
+          [{ text: "OK", onPress: () => onSave?.(data) }]
+        );
+      } else {
+        Alert.alert(
+          "❌ Erro ao Sincronizar",
+          result.error ?? "Não foi possível criar o lead no IFS.",
+          [
+            { text: "Tentar novamente", onPress: handleSave },
+            { text: "Cancelar", style: "cancel" },
+          ]
+        );
+      }
+    } catch (err) {
+      Alert.alert("Erro inesperado", "Tente novamente.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const renderTab = () => {
     switch (activeTab) {
@@ -442,14 +492,21 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
         </TouchableOpacity>
 
         <TouchableOpacity
-          onPress={() => onSave?.(data)}
+          onPress={handleSave}
+          disabled={saving}
           style={{ flex: 1, height: 52, borderRadius: 28, backgroundColor: "#CC0000", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, shadowColor: "#CC0000", shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 5 }}
           activeOpacity={0.85}
         >
-          <MaterialCommunityIcons name="content-save-outline" size={20} color="#fff" />
-          <Text style={{ color: "#fff", fontWeight: "700", fontSize: 15 }}>
-            {isEditing ? "Atualizar e Sincronizar com IFS" : "Salvar e Sincronizar com IFS"}
-          </Text>
+          {saving ? (
+            <ActivityIndicator color="#fff" size="small" />
+          ) : (
+            <>
+              <MaterialCommunityIcons name="content-save-outline" size={20} color="#fff" />
+              <Text style={{ color: "#fff", fontWeight: "700", fontSize: 15 }}>
+                {isEditing ? "Atualizar e Sincronizar com IFS" : "Salvar e Sincronizar com IFS"}
+              </Text>
+            </>
+          )}
         </TouchableOpacity>
       </View>
     </SafeAreaView>

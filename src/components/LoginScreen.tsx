@@ -9,24 +9,21 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
+  ActivityIndicator,
+  Alert
 } from "react-native";
 
-// ---------------------------------------------------------------------------
-// Tipos
-// ---------------------------------------------------------------------------
+import { loginAzure } from "@/components/azureAuth";
 type Props = {
-  onLogin?: (email: string, password: string) => void;
+  onLoginSuccess?: () => void; // ✅ mudou nome (fluxo SSO)
   onForgotPassword?: () => void;
   onBiometrics?: () => void;
   onFaceId?: () => void;
 };
 
-// ---------------------------------------------------------------------------
-// Componente
-// ---------------------------------------------------------------------------
 export default function LoginScreen({
-  onLogin,
+  onLoginSuccess,
   onForgotPassword,
   onBiometrics,
   onFaceId,
@@ -34,11 +31,27 @@ export default function LoginScreen({
   const [email, setEmail] = useState("marcos.okabayashi@tamexecutiva.com.br");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false); // ✅ novo
 
-  const handleLogin = () => {
-  if (!email || !password) return; // evita login vazio
-  onLogin?.(email, password);
-};  
+  // ✅ NOVO LOGIN (SSO)
+  const handleLogin = async () => {
+    try {
+      setLoading(true);
+
+      const result = await loginAzure();
+
+      if (result?.accessToken) {
+        onLoginSuccess?.(); // ✅ segue fluxo do app
+      } else {
+        Alert.alert("Erro", "Não foi possível autenticar.");
+      }
+
+    } catch (err) {
+      Alert.alert("Erro", "Falha no login com Microsoft.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <SafeAreaView className="flex-1 bg-white">
@@ -54,17 +67,14 @@ export default function LoginScreen({
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* ── Logo + Badge ── */}
+          {/* ── Logo ── */}
           <View className="flex-row items-center gap-3 mb-10">
-            <View className="w-12 h-12 bg-red-600 rounded-xl items-center justify-center shadow-md shadow-red-200">
-              {/* Ícone de avião — use sua própria imagem se disponível */}
+            <View className="w-12 h-12 bg-red-600 rounded-xl items-center justify-center">
               <Ionicons name="airplane" size={24} color="#fff" />
             </View>
             <View>
-              <Text className="text-xl font-bold text-gray-900 tracking-wide">
-                TAM
-              </Text>
-              <Text className="text-[10px] font-semibold tracking-[3px] text-gray-400 uppercase">
+              <Text className="text-xl font-bold text-gray-900">TAM</Text>
+              <Text className="text-[10px] text-gray-400 uppercase">
                 Aviação Executiva
               </Text>
             </View>
@@ -72,126 +82,91 @@ export default function LoginScreen({
 
           {/* ── Headline ── */}
           <View className="mb-8">
-            <Text className="text-3xl font-bold text-gray-900 leading-tight">
+            <Text className="text-3xl font-bold text-gray-900">
               Bem-vindo,{"\n"}Executivo.
             </Text>
             <Text className="text-sm text-gray-400 mt-2">
-              Acesse sua conta corporativa para continuar.
+              Acesse com sua conta corporativa Microsoft.
             </Text>
           </View>
 
-          {/* ── Formulário ── */}
+          {/* ── Campos (opcional manter) ── */}
           <View className="gap-3 mb-2">
-            {/* Campo e-mail */}
             <View className="bg-gray-100 rounded-2xl px-4 pt-2 pb-3">
-              <Text className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-1">
+              <Text className="text-[10px] text-gray-400 uppercase mb-1">
                 E-mail corporativo
               </Text>
               <TextInput
-                className="text-sm text-gray-800 p-0"
+                className="text-sm text-gray-800"
                 value={email}
                 onChangeText={setEmail}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoComplete="email"
-                returnKeyType="next"
-                placeholderTextColor="#9ca3af"
+                editable={false} // ✅ bloqueado (SSO decide)
               />
             </View>
 
-            {/* Campo senha */}
-            <View className="bg-gray-100 rounded-2xl px-4 py-4 flex-row items-center justify-between">
+            <View className="bg-gray-100 rounded-2xl px-4 py-4 flex-row items-center">
               <TextInput
-                className="flex-1 text-sm text-gray-800 p-0"
-                placeholder="Senha"
+                className="flex-1 text-sm text-gray-800"
+                placeholder="Senha gerenciada pela Microsoft"
                 placeholderTextColor="#9ca3af"
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry={!showPassword}
-                returnKeyType="done"
-                onSubmitEditing={handleLogin}
+                editable={false}
+                secureTextEntry
               />
-              <TouchableOpacity
-                onPress={() => setShowPassword((v) => !v)}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                accessibilityLabel={
-                  showPassword ? "Ocultar senha" : "Mostrar senha"
-                }
-              >
-                <Ionicons
-                  name={showPassword ? "eye-off-outline" : "eye-outline"}
-                  size={20}
-                  color="#9ca3af"
-                />
-              </TouchableOpacity>
             </View>
           </View>
 
-          {/* ── Esqueceu a senha ── */}
+          {/* ── Forgot password ── */}
           <TouchableOpacity
             onPress={onForgotPassword}
             className="self-end mb-6"
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
             <Text className="text-sm font-semibold text-red-600">
               Esqueceu a senha?
             </Text>
           </TouchableOpacity>
 
-          {/* ── Botão Entrar ── */}
+          {/* ✅ BOTÃO SSO */}
           <TouchableOpacity
             onPress={handleLogin}
             activeOpacity={0.85}
-            className="bg-red-600 rounded-2xl py-4 flex-row items-center justify-center gap-2 shadow-lg shadow-red-300 mb-8"
+            disabled={loading}
+            className="bg-red-600 rounded-2xl py-4 flex-row items-center justify-center gap-2 mb-8"
           >
-            <Text className="text-white font-bold text-base tracking-wide">
-              Entrar
-            </Text>
-            <Ionicons name="chevron-forward" size={18} color="#fff" />
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <>
+                <Text className="text-white font-bold text-base">
+                  Entrar com Microsoft
+                </Text>
+                <Ionicons name="logo-microsoft" size={18} color="#fff" />
+              </>
+            )}
           </TouchableOpacity>
 
-          {/* ── Divisor "ou" ── */}
-          <View className="flex-row items-center gap-3 mb-6">
-            <View className="flex-1 h-px bg-gray-200" />
-            <Text className="text-xs text-gray-400">ou</Text>
-            <View className="flex-1 h-px bg-gray-200" />
-          </View>
-
-          {/* ── Biometria / Face ID ── */}
+          {/* ── Biometria (opcional) ── */}
           <View className="flex-row gap-4">
             <TouchableOpacity
               onPress={onBiometrics}
-              activeOpacity={0.8}
-              className="flex-1 bg-gray-100 rounded-2xl py-4 items-center gap-1.5"
+              className="flex-1 bg-gray-100 rounded-2xl py-4 items-center"
             >
               <Ionicons name="finger-print-outline" size={26} color="#374151" />
-              <Text className="text-xs font-medium text-gray-600">
-                Biometria
-              </Text>
+              <Text className="text-xs text-gray-600">Biometria</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               onPress={onFaceId}
-              activeOpacity={0.8}
-              className="flex-1 bg-gray-100 rounded-2xl py-4 items-center gap-1.5"
+              className="flex-1 bg-gray-100 rounded-2xl py-4 items-center"
             >
               <Ionicons name="scan-outline" size={26} color="#374151" />
-              <Text className="text-xs font-medium text-gray-600">Face ID</Text>
+              <Text className="text-xs text-gray-600">Face ID</Text>
             </TouchableOpacity>
           </View>
 
-          {/* ── Rodapé ── */}
+          {/* ── Footer ── */}
           <View className="flex-row justify-center gap-2 mt-10">
-            <Text className="text-[10px] font-semibold tracking-widest text-gray-300 uppercase">
-              IFS ERP
-            </Text>
-            <Text className="text-[10px] text-gray-300">•</Text>
-            <Text className="text-[10px] font-semibold tracking-widest text-gray-300 uppercase">
-              Secure
-            </Text>
-            <Text className="text-[10px] text-gray-300">•</Text>
-            <Text className="text-[10px] font-semibold tracking-widest text-gray-300 uppercase">
-              v2.4.1
+            <Text className="text-[10px] text-gray-300 uppercase">
+              IFS ERP • Secure • v2.4.1
             </Text>
           </View>
         </ScrollView>

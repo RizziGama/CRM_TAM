@@ -28,7 +28,7 @@ export default function LoginScreen({
   onBiometrics,
   onFaceId,
 }: Props) {
-  const [email, setEmail] = useState("marcos.okabayashi@tamexecutiva.com.br");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false); // ✅ novo
@@ -100,6 +100,8 @@ export default function LoginScreen({
                 className="text-sm text-gray-800"
                 value={email}
                 onChangeText={setEmail}
+                placeholder="Detectado automaticamente pela Microsoft"
+                placeholderTextColor="#9ca3af"
                 editable={false} // ✅ bloqueado (SSO decide)
               />
             </View>

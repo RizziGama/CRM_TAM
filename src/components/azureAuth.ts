@@ -17,11 +17,88 @@ const discovery = {
 
 const redirectUri = AuthSession.makeRedirectUri({
   scheme: 'tamexecutiva',
+  path: 'redirect',
 });
 
 export interface AzureAuthResult {
   accessToken: string;
   idToken?: string;
+}
+
+export interface AzureUserInfo {
+  name: string;
+  email: string;
+  initials: string;
+}
+
+// ─── Decodificação do ID Token (JWT) ───────────────────────────────────────
+//
+// O ID Token é um JWT (header.payload.signature) em Base64URL. Não
+// precisamos validar assinatura aqui — isso já foi feito pelo Azure AD na
+// troca do código; só precisamos ler o "payload" para extrair claims como
+// nome e e-mail do usuário que acabou de logar.
+
+function base64UrlDecode(input: string): string {
+  // Base64URL -> Base64 padrão
+  let base64 = input.replace(/-/g, '+').replace(/_/g, '/');
+  while (base64.length % 4 !== 0) {
+    base64 += '=';
+  }
+
+  // atob está disponível tanto no runtime web quanto no Hermes/React Native.
+  const decoded = atob(base64);
+
+  // Decodifica UTF-8 corretamente (nomes com acentos, etc.)
+  try {
+    return decodeURIComponent(
+      decoded
+        .split('')
+        .map((c) => '%' + c.charCodeAt(0).toString(16).padStart(2, '0'))
+        .join('')
+    );
+  } catch {
+    return decoded;
+  }
+}
+
+function decodeJwtPayload(token: string): Record<string, any> | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return null;
+    return JSON.parse(base64UrlDecode(parts[1]));
+  } catch (err) {
+    console.warn('[azureAuth] Falha ao decodificar ID Token:', err);
+    return null;
+  }
+}
+
+function computeInitials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '?';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+}
+
+// Extrai nome/e-mail reais das claims do Azure AD. Diferentes tenants/fluxos
+// podem popular claims um pouco diferentes, então tentamos várias opções
+// antes de cair num fallback.
+function extractUserInfo(idToken: string): AzureUserInfo | null {
+  const claims = decodeJwtPayload(idToken);
+  if (!claims) return null;
+
+  const name: string =
+    claims.name || claims.given_name
+      ? `${claims.given_name ?? ''} ${claims.family_name ?? ''}`.trim()
+      : claims.preferred_username || claims.email || 'Usuário';
+
+  const email: string =
+    claims.preferred_username || claims.email || claims.upn || '';
+
+  return {
+    name: name || 'Usuário',
+    email,
+    initials: computeInitials(name || email || '?'),
+  };
 }
 
 // ─── Login ──────────────────────────────────────────────────────────────────
@@ -60,6 +137,16 @@ export async function loginAzure(): Promise<AzureAuthResult | null> {
   await SecureStore.setItemAsync('accessToken', tokenResult.accessToken);
   await SecureStore.setItemAsync('idToken', tokenResult.idToken ?? '');
 
+  // Extrai nome/e-mail reais do usuário que acabou de logar e persiste para
+  // uso em qualquer tela (avatar, menu de usuário, etc.) sem precisar
+  // decodificar o token de novo toda hora.
+  if (tokenResult.idToken) {
+    const userInfo = extractUserInfo(tokenResult.idToken);
+    if (userInfo) {
+      await SecureStore.setItemAsync('userInfo', JSON.stringify(userInfo));
+    }
+  }
+
   return {
     accessToken: tokenResult.accessToken,
     idToken: tokenResult.idToken,
@@ -75,6 +162,7 @@ export async function logoutAzure(): Promise<void> {
   // navegador falhe lá embaixo, o usuário já está deslogado do app.
   await SecureStore.deleteItemAsync('accessToken');
   await SecureStore.deleteItemAsync('idToken');
+  await SecureStore.deleteItemAsync('userInfo');
 
   const params = new URLSearchParams({
     post_logout_redirect_uri: redirectUri,
@@ -97,4 +185,34 @@ export async function logoutAzure(): Promise<void> {
 
 export async function getToken(): Promise<string | null> {
   return SecureStore.getItemAsync('accessToken');
+}
+
+// ─── Usuário logado atual ──────────────────────────────────────────────────
+//
+// Retorna nome/e-mail/iniciais reais do usuário Microsoft autenticado,
+// lidos do ID Token salvo no login. Retorna null se não houver sessão.
+
+export async function getUserInfo(): Promise<AzureUserInfo | null> {
+  const stored = await SecureStore.getItemAsync('userInfo');
+  if (stored) {
+    try {
+      return JSON.parse(stored) as AzureUserInfo;
+    } catch {
+      // cai para tentar recalcular a partir do idToken abaixo
+    }
+  }
+
+  // Fallback: se por algum motivo o userInfo não foi persistido (ex.: login
+  // feito antes desta atualização), tenta recalcular a partir do idToken
+  // ainda salvo, e já corrige o cache para as próximas leituras.
+  const idToken = await SecureStore.getItemAsync('idToken');
+  if (idToken) {
+    const userInfo = extractUserInfo(idToken);
+    if (userInfo) {
+      await SecureStore.setItemAsync('userInfo', JSON.stringify(userInfo));
+      return userInfo;
+    }
+  }
+
+  return null;
 }

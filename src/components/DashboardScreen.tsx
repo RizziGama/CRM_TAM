@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
 import NovoLeadScreen from "./NovoLeadScreen";
+import { AzureUserInfo } from "@/components/azureAuth";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -41,6 +42,7 @@ interface EventData {
 interface DashboardProps {
   onLeadPress?: (lead: { nomeEmpresa: string; nomeContato: string; mercado: string; notasEvento: string; dataCriacao: string }) => void;
   onVerTodos?: () => void;
+  userInfo?: AzureUserInfo | null;
 }
 
 // ─── Dados Mock ───────────────────────────────────────────────────────────────
@@ -92,9 +94,14 @@ const LeadCard: React.FC<{ lead: Lead; onPress?: () => void }> = ({ lead, onPres
 
 // ─── Tela Principal ───────────────────────────────────────────────────────────
 
-const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos }) => {
+const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, userInfo }) => {
   const [search, setSearch] = useState("");
   const [novoLeadVisible, setNovoLeadVisible] = useState(false);
+
+  // Nome/iniciais reais do usuário Microsoft logado, com fallback enquanto
+  // carrega ou caso não seja possível ler o token.
+  const displayName = userInfo?.name ?? "Usuário";
+  const displayInitials = userInfo?.initials ?? "?";
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#F4F4F6" }}>
@@ -111,13 +118,13 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos }) 
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 }}>
         <View>
           <Text style={{ fontSize: 13, color: "#888" }}>Bom dia,</Text>
-          <Text style={{ fontSize: 21, fontWeight: "700", color: "#111", marginTop: 1 }}>Marcos Okabayashi</Text>
+          <Text style={{ fontSize: 21, fontWeight: "700", color: "#111", marginTop: 1 }}>{displayName}</Text>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
           <TouchableOpacity style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: "#ECECEC", alignItems: "center", justifyContent: "center" }}>
             <Ionicons name="notifications-outline" size={20} color="#555" />
           </TouchableOpacity>
-          <Avatar initials="MO" size={38} bgColor="#CC0000" />
+          <Avatar initials={displayInitials} size={38} bgColor="#CC0000" />
         </View>
       </View>
 

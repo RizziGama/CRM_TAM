@@ -1,11 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useState } from "react";
-import { Alert, Modal, Platform, Text, TouchableOpacity, View } from "react-native";
+import { useEffect, useState } from "react";
+import { Modal, Platform, Text, TouchableOpacity, View } from "react-native";
 import AgendaScreen from "./AgendaScreen";
 import DashboardScreen from "./DashboardScreen";
 import LeadsScreen from "./LeadsScreen";
 import NovoLeadScreen from "./NovoLeadScreen";
-import { logoutAzure } from "@/components/azureAuth";
+import { AzureUserInfo, getUserInfo } from "@/components/azureAuth";
+import { UserMenu } from "@/components/UserMenu";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -70,7 +71,13 @@ function BottomTabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) =>
 export default function AppMain({ onLogout }: AppMainProps) {
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [leadEditando, setLeadEditando] = useState<LeadParaEditar | null>(null);
-  const [loggingOut, setLoggingOut] = useState(false);
+  const [userInfo, setUserInfo] = useState<AzureUserInfo | null>(null);
+
+  // Carrega os dados reais do usuário Microsoft autenticado (nome, e-mail,
+  // iniciais) para exibir no cabeçalho do Dashboard e no UserMenu.
+  useEffect(() => {
+    getUserInfo().then(setUserInfo);
+  }, []);
 
   // Chamado pelo DashboardScreen ao clicar num lead
   const handleLeadPress = (lead: LeadParaEditar) => {
@@ -82,29 +89,6 @@ export default function AppMain({ onLogout }: AppMainProps) {
     setActiveTab("leads");
   };
 
-  const handleLogout = () => {
-    Alert.alert(
-      "Sair da conta",
-      "Deseja realmente encerrar sua sessão?",
-      [
-        { text: "Cancelar", style: "cancel" },
-        {
-          text: "Sair",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              setLoggingOut(true);
-              await logoutAzure();
-            } finally {
-              setLoggingOut(false);
-              onLogout?.();
-            }
-          },
-        },
-      ]
-    );
-  };
-
   const renderScreen = () => {
     switch (activeTab) {
       case "dashboard":
@@ -112,6 +96,7 @@ export default function AppMain({ onLogout }: AppMainProps) {
           <DashboardScreen
             onLeadPress={handleLeadPress}
             onVerTodos={handleVerTodos}
+            userInfo={userInfo}
           />
         );
       case "agenda":
@@ -137,26 +122,11 @@ export default function AppMain({ onLogout }: AppMainProps) {
         {renderScreen()}
       </View>
 
-      {/* Botão de logout flutuante — fica visível em qualquer aba */}
-      <TouchableOpacity
-        onPress={handleLogout}
-        disabled={loggingOut}
-        style={{
-          position: "absolute",
-          top: Platform.OS === "ios" ? 54 : 28,
-          right: 16,
-          width: 36,
-          height: 36,
-          borderRadius: 18,
-          backgroundColor: "rgba(0,0,0,0.06)",
-          alignItems: "center",
-          justifyContent: "center",
-          opacity: loggingOut ? 0.5 : 1,
-        }}
-        activeOpacity={0.7}
-      >
-        <Ionicons name="log-out-outline" size={20} color="#555" />
-      </TouchableOpacity>
+      {/* Avatar do usuário — fica visível em qualquer aba. Ao tocar, mostra
+          nome/e-mail reais do usuário logado e a opção de sair. */}
+      <View style={{ position: "absolute", top: Platform.OS === "ios" ? 54 : 28, right: 16 }}>
+        <UserMenu onLogout={onLogout} size={36} />
+      </View>
 
       <BottomTabBar active={activeTab} onChange={setActiveTab} />
     </View>

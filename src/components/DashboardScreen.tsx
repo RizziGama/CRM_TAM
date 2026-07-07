@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
 import NovoLeadScreen from "./NovoLeadScreen";
-import { AzureUserInfo } from "@/components/azureAuth";
+import { AzureUserInfo, getUserInfo } from "@/components/azureAuth";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -68,11 +68,30 @@ const LEADS: Lead[] = [
 
 const Avatar: React.FC<{ initials: string; size?: number; bgColor?: string }> = ({
   initials, size = 44, bgColor = "#CC0000",
-}) => (
-  <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: bgColor, alignItems: "center", justifyContent: "center" }}>
-    <Text style={{ color: "#fff", fontWeight: "700", fontSize: size * 0.36 }}>{initials}</Text>
-  </View>
-);
+}) => {
+  const avatarStyle = {
+    width: size,
+    height: size,
+    borderRadius: size / 2,
+    backgroundColor: bgColor,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+    elevation: 0,
+    shadowColor: "transparent",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0,
+    shadowRadius: 0,
+  } as const;
+
+  const textStyle = { color: "#fff", fontWeight: "700", fontSize: size * 0.36 } as const;
+
+  return (
+    <View style={avatarStyle}>
+      <Text style={textStyle}>{initials}</Text>
+    </View>
+  );
+};
 
 const LeadCard: React.FC<{ lead: Lead; onPress?: () => void }> = ({ lead, onPress }) => (
   <TouchableOpacity onPress={onPress} activeOpacity={0.75} style={{ flexDirection: "row", alignItems: "center", backgroundColor: "#fff", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, marginBottom: 10, shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 2 }}>
@@ -94,14 +113,35 @@ const LeadCard: React.FC<{ lead: Lead; onPress?: () => void }> = ({ lead, onPres
 
 // ─── Tela Principal ───────────────────────────────────────────────────────────
 
-const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, userInfo }) => {
+const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, userInfo: userInfoProp }) => {
   const [search, setSearch] = useState("");
   const [novoLeadVisible, setNovoLeadVisible] = useState(false);
+  const [userInfoState, setUserInfoState] = useState<AzureUserInfo | null>(null);
+
+  // Se o componente pai passar userInfo explicitamente, usamos ele (override).
+  // Caso contrário, buscamos o usuário logado direto do SecureStore/token.
+  useEffect(() => {
+    if (userInfoProp) return; // pai já está controlando
+
+    let mounted = true;
+    getUserInfo()
+      .then((info) => {
+        if (mounted) setUserInfoState(info);
+      })
+      .catch((err) => {
+        console.warn("[DashboardScreen] Falha ao buscar userInfo:", err);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [userInfoProp]);
+
+  const userInfo = userInfoProp ?? userInfoState;
 
   // Nome/iniciais reais do usuário Microsoft logado, com fallback enquanto
   // carrega ou caso não seja possível ler o token.
   const displayName = userInfo?.name ?? "Usuário";
-  const displayInitials = userInfo?.initials ?? "?";
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#F4F4F6" }}>
@@ -114,18 +154,30 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, us
         />
       </Modal>
 
-      {/* Header */}
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 }}>
+      {/* Header
+          Obs.: o avatar do usuário (com menu de logout) já é exibido
+          globalmente pelo <UserMenu /> em AppMain.tsx, flutuando por cima
+          de todas as abas. Por isso NÃO renderizamos um Avatar aqui de novo
+          — isso é o que causava o círculo duplicado/deslocado no canto
+          superior direito. O paddingRight extra abaixo só garante que o
+          sino de notificação não fique colado embaixo do avatar flutuante. */}
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingRight: 64, paddingTop: 12, paddingBottom: 8 }}>
         <View>
           <Text style={{ fontSize: 13, color: "#888" }}>Bom dia,</Text>
           <Text style={{ fontSize: 21, fontWeight: "700", color: "#111", marginTop: 1 }}>{displayName}</Text>
         </View>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-          <TouchableOpacity style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: "#ECECEC", alignItems: "center", justifyContent: "center" }}>
-            <Ionicons name="notifications-outline" size={20} color="#555" />
-          </TouchableOpacity>
-          <Avatar initials={displayInitials} size={38} bgColor="#CC0000" />
-        </View>
+        <TouchableOpacity
+          style={{
+            width: 38,
+            height: 38,
+            borderRadius: 19,
+            backgroundColor: "#ECECEC",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Ionicons name="notifications-outline" size={20} color="#555" />
+        </TouchableOpacity>
       </View>
 
       {/* Search */}

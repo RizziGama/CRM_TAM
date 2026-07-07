@@ -10,6 +10,7 @@ import {
   View,
 } from "react-native";
 import { AzureUserInfo, getUserInfo, logoutAzure } from "@/components/azureAuth";
+import { clearExecutivoCache } from "@/components/ifsService";
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
@@ -73,6 +74,11 @@ export function UserMenu({ onLogout, size = 36 }: UserMenuProps) {
             try {
               setLoggingOut(true);
               await logoutAzure();
+              // Limpa também o executivo de vendas cacheado — senão, ao
+              // logar com outra conta, o app poderia usar o representante
+              // errado até revalidar (o próximo login já revalida do zero,
+              // mas isso evita qualquer janela de inconsistência).
+              await clearExecutivoCache();
             } finally {
               setLoggingOut(false);
               onLogout?.();

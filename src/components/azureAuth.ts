@@ -86,16 +86,29 @@ function extractUserInfo(idToken: string): AzureUserInfo | null {
   const claims = decodeJwtPayload(idToken);
   if (!claims) return null;
 
-  const name: string =
-    claims.name || claims.given_name
+  // Prioridade: claims.name (o mais comum no v2.0 endpoint) > montagem via
+  // given_name/family_name (caso existam) > preferred_username/email > fallback.
+  //
+  // FIX: antes, quando "name" existia mas "given_name"/"family_name" não,
+  // o código montava `${given_name} ${family_name}`.trim() mesmo assim,
+  // resultando em string vazia e derrubando pro fallback "Usuário".
+  const nameFromParts =
+    claims.given_name || claims.family_name
       ? `${claims.given_name ?? ''} ${claims.family_name ?? ''}`.trim()
-      : claims.preferred_username || claims.email || 'Usuário';
+      : '';
+
+  const name: string =
+    claims.name ||
+    nameFromParts ||
+    claims.preferred_username ||
+    claims.email ||
+    'Usuário';
 
   const email: string =
     claims.preferred_username || claims.email || claims.upn || '';
 
   return {
-    name: name || 'Usuário',
+    name,
     email,
     initials: computeInitials(name || email || '?'),
   };

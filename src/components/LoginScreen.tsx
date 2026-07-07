@@ -14,7 +14,9 @@ import {
   Alert
 } from "react-native";
 
-import { loginAzure } from "@/components/azureAuth";
+import { getUserInfo, loginAzure, logoutAzure } from "@/components/azureAuth";
+import { buscarExecutivoDeVendas, cacheExecutivo, clearExecutivoCache } from "@/components/ifsService";
+
 type Props = {
   onLoginSuccess?: () => void; // ✅ mudou nome (fluxo SSO)
   onForgotPassword?: () => void;
@@ -33,18 +35,58 @@ export default function LoginScreen({
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false); // ✅ novo
 
-  // ✅ NOVO LOGIN (SSO)
+  // ✅ NOVO LOGIN (SSO) + validação de Executivo de Vendas no IFS
   const handleLogin = async () => {
     try {
       setLoading(true);
 
       const result = await loginAzure();
 
-      if (result?.accessToken) {
-        onLoginSuccess?.(); // ✅ segue fluxo do app
-      } else {
+      if (!result?.accessToken) {
         Alert.alert("Erro", "Não foi possível autenticar.");
+        return;
       }
+
+      // Login no Azure OK — agora confirma se esse usuário é um Executivo
+      // de Vendas cadastrado (e ativo) no IFS antes de liberar o app.
+      const userInfo = await getUserInfo();
+
+      if (!userInfo?.email) {
+        Alert.alert(
+          "Erro",
+          "Não foi possível identificar o e-mail do usuário autenticado."
+        );
+        await logoutAzure();
+        await clearExecutivoCache();
+        return;
+      }
+
+      const executivo = await buscarExecutivoDeVendas(userInfo.email);
+
+      if (!executivo) {
+        Alert.alert(
+          "Acesso restrito",
+          "Seu usuário não está cadastrado como Executivo de Vendas no IFS. Entre em contato com o administrador do sistema."
+        );
+        await logoutAzure();
+        await clearExecutivoCache();
+        return;
+      }
+
+      if (!executivo.ativo) {
+        Alert.alert(
+          "Acesso bloqueado",
+          "Seu cadastro de Executivo de Vendas está inativo no IFS. Entre em contato com o administrador do sistema."
+        );
+        await logoutAzure();
+        await clearExecutivoCache();
+        return;
+      }
+
+      // Tudo certo: guarda o executivo real (ID + nome do IFS) para uso em
+      // qualquer tela (ex.: cadastro de lead) e libera o acesso ao app.
+      await cacheExecutivo(executivo);
+      onLoginSuccess?.();
 
     } catch (err) {
       Alert.alert("Erro", "Falha no login com Microsoft.");

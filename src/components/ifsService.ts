@@ -12,8 +12,12 @@
 // não deixar a senha "hardcoded" e versionada no histórico do git/arquivo.
 // Adicione .env ao .gitignore.)
 
-const IFS_BASE_URL =
-  "https://tamifssup.avcweb.com.br:443/int/ifsapplications/projection/v1/BusinessLeadHandling.svc";
+import * as SecureStore from "expo-secure-store";
+
+const IFS_HOST = "https://tamifssup.avcweb.com.br:443/int/ifsapplications/projection/v1";
+
+const IFS_BASE_URL = `${IFS_HOST}/BusinessLeadHandling.svc`;
+const IFS_REPRESENTATIVE_URL = `${IFS_HOST}/BusinessRepresentativeHandling.svc`;
 
 const IFS_USER = process.env.EXPO_PUBLIC_IFS_USER ?? "INTEGRACAO";
 const IFS_PASS = process.env.EXPO_PUBLIC_IFS_PASS ?? "";
@@ -35,6 +39,15 @@ export interface IFSApiResponse {
   rawError?: string;
 }
 
+export interface ExecutivoInfo {
+  id: string;       // RepresentativeId — usado como MainRepresentativeId no lead
+  nome: string;      // Nome completo (PersonInfoRef.Name)
+  userId: string;    // Username funcional do IFS (ex.: "RAFAEL.LEITE")
+  ativo: boolean;    // Objstate === "Active"
+}
+
+const EXECUTIVO_CACHE_KEY = "executivoInfo";
+
 // ─── Mapeamentos ──────────────────────────────────────────────────────────────
 
 const mapIdioma = (idioma: string): string => {
@@ -53,6 +66,92 @@ const formatDateToISO = (date: string): string => {
   return new Date().toISOString().split("T")[0];
 };
 
+// ─── Verificar Executivo de Vendas ─────────────────────────────────────────────
+//
+// Consulta a lista de Executivos de Vendas do IFS (BusinessRepresentativeSet) e
+// retorna o registro correspondente ao usuário logado no Azure AD, comparando
+// o "UserId" do IFS (ex.: "RAFAEL.LEITE") com a parte antes do "@" do e-mail
+// corporativo (ex.: "rafael.leite@dominio.com" → "RAFAEL.LEITE").
+//
+// Retorna null se:
+//  - o usuário não existir na lista de representantes, OU
+//  - existir mas estiver com Objstate = "Blocked".
+
+export async function buscarExecutivoDeVendas(
+  emailAzure: string
+): Promise<ExecutivoInfo | null> {
+  const userIdAlvo = emailAzure.split("@")[0]?.trim().toUpperCase();
+  if (!userIdAlvo) return null;
+
+  try {
+    const url =
+      `${IFS_REPRESENTATIVE_URL}/BusinessRepresentativeSet` +
+      `?$expand=PersonInfoRef($select=Name,UserId)` +
+      `&$select=RepresentativeId,Objstate`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Accept": "application/json",
+        "Authorization": basicAuth,
+      },
+    });
+
+    if (!response.ok) {
+      console.warn(`[IFS] Falha ao buscar executivos: HTTP ${response.status}`);
+      return null;
+    }
+
+    const json = await response.json();
+    const lista: any[] = json?.value ?? [];
+
+    const encontrado = lista.find((rep) => {
+      const userId: string = rep?.PersonInfoRef?.UserId ?? "";
+      return userId.trim().toUpperCase() === userIdAlvo;
+    });
+
+    if (!encontrado) {
+      console.log(`[IFS] Usuário "${userIdAlvo}" não encontrado na lista de Executivos de Vendas.`);
+      return null;
+    }
+
+    const ativo = encontrado.Objstate === "Active";
+
+    return {
+      id: String(encontrado.RepresentativeId),
+      nome: encontrado.PersonInfoRef?.Name ?? emailAzure,
+      userId: encontrado.PersonInfoRef?.UserId ?? userIdAlvo,
+      ativo,
+    };
+  } catch (err) {
+    console.error("[IFS] Erro ao verificar executivo de vendas:", err);
+    return null;
+  }
+}
+
+// ─── Cache local do Executivo logado ───────────────────────────────────────────
+//
+// Guardamos o executivo já validado no SecureStore para não precisar consultar
+// o IFS de novo em toda tela que precisa mostrar/usar o nome/ID real.
+
+export async function cacheExecutivo(info: ExecutivoInfo): Promise<void> {
+  await SecureStore.setItemAsync(EXECUTIVO_CACHE_KEY, JSON.stringify(info));
+}
+
+export async function getExecutivoCache(): Promise<ExecutivoInfo | null> {
+  const stored = await SecureStore.getItemAsync(EXECUTIVO_CACHE_KEY);
+  if (!stored) return null;
+  try {
+    return JSON.parse(stored) as ExecutivoInfo;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearExecutivoCache(): Promise<void> {
+  await SecureStore.deleteItemAsync(EXECUTIVO_CACHE_KEY);
+}
+
 // ─── Criar Lead ───────────────────────────────────────────────────────────────
 
 export async function criarLeadIFS(formData: {
@@ -61,11 +160,18 @@ export async function criarLeadIFS(formData: {
   cnpj?: string;
   idioma?: string;
   dataCriacao?: string;
+  mainRepresentativeId?: string; // ID real do executivo logado (vem do IFS)
   [key: string]: any;
 }): Promise<IFSApiResponse> {
 
   if (!formData.nomeEmpresa?.trim()) {
     return { success: false, error: "Nome da empresa é obrigatório." };
+  }
+
+  if (!formData.mainRepresentativeId) {
+    console.warn(
+      "[IFS] mainRepresentativeId não informado — verifique se o executivo logado foi validado corretamente antes de salvar."
+    );
   }
 
   const payload = {
@@ -79,7 +185,7 @@ export async function criarLeadIFS(formData: {
     PotentialId: null,
     SourceId: "Id20",
     StageId: null,
-    MainRepresentativeId: "197",
+    MainRepresentativeId: formData.mainRepresentativeId ?? "197",
     MarketCode: null,
     Note: null,
     CreationDate: formatDateToISO(formData.dataCriacao ?? ""),

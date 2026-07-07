@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import AppMain from "./AppMain";
 import LoginScreen from "./LoginScreen";
 import { getToken } from "@/components/azureAuth";
+import { getExecutivoCache } from "@/components/ifsService";
 import { View, ActivityIndicator } from "react-native";
 
 export default function AppRoot() {
@@ -10,7 +11,12 @@ export default function AppRoot() {
   useEffect(() => {
     async function checkAuth() {
       const token = await getToken();
-      setLogged(!!token);
+      // Só considera "logado" se tiver token Azure E o executivo de vendas
+      // já validado/cacheado no login. Se faltar qualquer um dos dois
+      // (ex.: sessão antiga de antes dessa validação existir, ou cache
+      // limpo por algum motivo), manda de volta pro login pra revalidar.
+      const executivo = token ? await getExecutivoCache() : null;
+      setLogged(!!token && !!executivo);
     }
 
     checkAuth();

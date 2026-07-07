@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -13,7 +13,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
-import { criarLeadIFS } from "./ifsService";
+import { criarLeadIFS, getExecutivoCache, ExecutivoInfo } from "./ifsService";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -59,6 +59,15 @@ const formatCNPJ = (value: string): string => {
 const formatDate = (): string => {
   const d = new Date();
   return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+};
+
+// Iniciais a partir do nome completo do executivo (ex.: "RAFAEL DE CARVALHO
+// FERREIRA LEITE" -> "RL"), mesmo padrão usado em azureAuth.ts/UserMenu.
+const computeInitials = (nome: string): string => {
+  const words = nome.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "?";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[words.length - 1][0]).toUpperCase();
 };
 
 // ─── Sub-componentes ──────────────────────────────────────────────────────────
@@ -120,9 +129,44 @@ const NotasEvento: React.FC<{ value: string; onChangeText: (v: string) => void }
   </View>
 );
 
+// ─── Card do Executivo de Vendas real ──────────────────────────────────────────
+
+const CardExecutivo: React.FC<{ executivo: ExecutivoInfo | null; carregando: boolean }> = ({
+  executivo,
+  carregando,
+}) => (
+  <View style={{ backgroundColor: "#FFF0F0", borderRadius: 16, padding: 16, marginBottom: 12, flexDirection: "row", alignItems: "center", gap: 12 }}>
+    <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: "#CC0000", alignItems: "center", justifyContent: "center" }}>
+      {carregando ? (
+        <ActivityIndicator color="#fff" size="small" />
+      ) : (
+        <Text style={{ color: "#fff", fontWeight: "700", fontSize: 14 }}>
+          {executivo ? computeInitials(executivo.nome) : "?"}
+        </Text>
+      )}
+    </View>
+    <View>
+      <Text style={{ fontSize: 10, fontWeight: "700", color: "#CC0000", letterSpacing: 1, textTransform: "uppercase" }}>
+        Executivo de Vendas
+      </Text>
+      <Text style={{ fontSize: 13, fontWeight: "700", color: "#111", marginTop: 2 }}>
+        {carregando ? "Carregando..." : executivo?.nome ?? "Não identificado"}
+      </Text>
+      <Text style={{ fontSize: 11, color: "#999", marginTop: 1 }}>
+        {executivo ? `ID: ${executivo.id}` : ""}
+      </Text>
+    </View>
+  </View>
+);
+
 // ─── Aba: Diversos ────────────────────────────────────────────────────────────
 
-const TabDiversos: React.FC<{ data: LeadData; setData: (d: Partial<LeadData>) => void }> = ({ data, setData }) => (
+const TabDiversos: React.FC<{
+  data: LeadData;
+  setData: (d: Partial<LeadData>) => void;
+  executivo: ExecutivoInfo | null;
+  carregandoExecutivo: boolean;
+}> = ({ data, setData, executivo, carregandoExecutivo }) => (
   <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
     {/* Card principal */}
     <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
@@ -171,21 +215,8 @@ const TabDiversos: React.FC<{ data: LeadData; setData: (d: Partial<LeadData>) =>
       <SelectField label="Origem" value={data.origem} />
     </View>
 
-    {/* Card Executivo de Vendas */}
-    <View style={{ backgroundColor: "#FFF0F0", borderRadius: 16, padding: 16, marginBottom: 12, flexDirection: "row", alignItems: "center", gap: 12 }}>
-      <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: "#CC0000", alignItems: "center", justifyContent: "center" }}>
-        <Text style={{ color: "#fff", fontWeight: "700", fontSize: 14 }}>MO</Text>
-      </View>
-      <View>
-        <Text style={{ fontSize: 10, fontWeight: "700", color: "#CC0000", letterSpacing: 1, textTransform: "uppercase" }}>
-          Executivo de Vendas
-        </Text>
-        <Text style={{ fontSize: 13, fontWeight: "700", color: "#111", marginTop: 2 }}>
-          MARCOS F. DOS SANTOS OKABAYASHI
-        </Text>
-        <Text style={{ fontSize: 11, color: "#999", marginTop: 1 }}>ID: 198</Text>
-      </View>
-    </View>
+    {/* Card Executivo de Vendas — agora com dados reais do IFS */}
+    <CardExecutivo executivo={executivo} carregando={carregandoExecutivo} />
 
     {/* Card campos adicionais */}
     <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
@@ -320,9 +351,6 @@ const TabExecutivos: React.FC<{ data: LeadData; setData: (d: Partial<LeadData>) 
         />
       </View>
     </View>
-    <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
-      <NotasEvento value={data.notasEvento} onChangeText={(v) => setData({ notasEvento: v })} />
-    </View>
   </ScrollView>
 );
 
@@ -358,12 +386,42 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
     ...initialData,
   });
 
+  // Executivo de Vendas real (logado e já validado contra o IFS no login).
+  // Vem do cache local — não precisa consultar o IFS de novo aqui.
+  const [executivo, setExecutivo] = useState<ExecutivoInfo | null>(null);
+  const [carregandoExecutivo, setCarregandoExecutivo] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    getExecutivoCache()
+      .then((info) => {
+        if (mounted) setExecutivo(info);
+      })
+      .catch((err) => {
+        console.warn("[NovoLeadScreen] Falha ao buscar executivo do cache:", err);
+      })
+      .finally(() => {
+        if (mounted) setCarregandoExecutivo(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const setData = (partial: Partial<LeadData>) =>
     setDataState((prev) => ({ ...prev, ...partial }));
 
   const handleSave = async () => {
     if (!data.nomeEmpresa?.trim()) {
       Alert.alert("Campo obrigatório", "Informe o Nome da Empresa antes de salvar.");
+      return;
+    }
+
+    if (!executivo) {
+      Alert.alert(
+        "Executivo não identificado",
+        "Não foi possível identificar o Executivo de Vendas responsável. Faça login novamente antes de salvar o lead."
+      );
       return;
     }
 
@@ -382,6 +440,7 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
         dataCriacao:   data.dataCriacao,
         notasEvento:   data.notasEvento,
         leadDuplicado: data.leadDuplicado,
+        mainRepresentativeId: executivo.id,
       });
 
       if (result.success) {
@@ -409,7 +468,15 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
 
   const renderTab = () => {
     switch (activeTab) {
-      case "diversos":    return <TabDiversos data={data} setData={setData} />;
+      case "diversos":
+        return (
+          <TabDiversos
+            data={data}
+            setData={setData}
+            executivo={executivo}
+            carregandoExecutivo={carregandoExecutivo}
+          />
+        );
       case "contatos":    return <TabContatos data={data} setData={setData} />;
       case "atividades":  return <TabAtividades data={data} setData={setData} />;
       case "executivos":  return <TabExecutivos data={data} setData={setData} />;

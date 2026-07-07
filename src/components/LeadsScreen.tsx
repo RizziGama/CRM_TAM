@@ -165,11 +165,14 @@ const LeadCard: React.FC<{
 
 // ─── Tela Principal ───────────────────────────────────────────────────────────
 
-type Filtro = "todos" | LeadStatus;
+// Só faz sentido filtrar entre "Pendente" e "Erro" aqui: leads já
+// sincronizados com o IFS não aparecem mais nesta tela (ver
+// `leadsNaoSincronizados` abaixo), então não há motivo pra ter um filtro
+// "Sync" que nunca mostraria nada.
+type Filtro = "todos" | "pendente" | "erro";
 
 const FILTROS: { key: Filtro; label: string }[] = [
   { key: "todos", label: "Todos" },
-  { key: "sync", label: "Sync" },
   { key: "pendente", label: "Pendente" },
   { key: "erro", label: "Erro" },
 ];
@@ -197,7 +200,14 @@ export default function LeadsScreen() {
     carregarLeads();
   }, [carregarLeads]);
 
-  const leadsCard = leads.map(paraCard);
+  // Nesta tela só devem aparecer leads que AINDA NÃO foram sincronizados
+  // com o IFS ("pendente" ou "erro"). Leads com status "sync" já estão
+  // consolidados no IFS e não podem mais ser editados pelo app — por isso
+  // somem da listagem (e, consequentemente, não há como abrir a edição
+  // deles a partir daqui).
+  const leadsNaoSincronizados = leads.filter((l) => l.status !== "sync");
+
+  const leadsCard = leadsNaoSincronizados.map(paraCard);
 
   const leadsFiltrados = leadsCard.filter((lead) => {
     const matchFiltro = filtro === "todos" || lead.status === filtro;
@@ -301,7 +311,7 @@ export default function LeadsScreen() {
       <View style={{ paddingHorizontal: 20, paddingTop: 14, paddingBottom: 10 }}>
         <Text style={{ fontSize: 24, fontWeight: "800", color: "#111" }}>Pipeline de Leads</Text>
         <Text style={{ fontSize: 13, color: "#888", marginTop: 2 }}>
-          {leads.length} prospects cadastrados
+          {leadsCard.length} leads aguardando sincronização
         </Text>
       </View>
 
@@ -373,7 +383,7 @@ export default function LeadsScreen() {
             <View style={{ alignItems: "center", paddingTop: 60 }}>
               <Ionicons name="search-outline" size={48} color="#DDD" />
               <Text style={{ color: "#BBB", marginTop: 12, fontSize: 15 }}>
-                {leads.length === 0 ? "Nenhum lead cadastrado ainda" : "Nenhum lead encontrado"}
+                {leadsCard.length === 0 ? "Nenhum lead pendente ou com erro" : "Nenhum lead encontrado"}
               </Text>
             </View>
           ) : (
@@ -383,7 +393,7 @@ export default function LeadsScreen() {
                 lead={lead}
                 sincronizando={sincronizandoId === lead.id}
                 onPress={() => {
-                  const original = leads.find((l) => l.id === lead.id) ?? null;
+                  const original = leadsNaoSincronizados.find((l) => l.id === lead.id) ?? null;
                   setSelectedLead(original);
                 }}
                 onRetry={() => handleRetry(lead.id)}

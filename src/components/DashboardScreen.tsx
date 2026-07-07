@@ -8,6 +8,7 @@ import {
   StatusBar,
   SafeAreaView,
   Modal,
+  Alert,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
 import NovoLeadScreen from "./NovoLeadScreen";
@@ -146,6 +147,7 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, us
   const [userInfoState, setUserInfoState] = useState<AzureUserInfo | null>(null);
   const [leadsRecentes, setLeadsRecentes] = useState<LeadLocal[]>([]);
   const [totalLeads, setTotalLeads] = useState(0);
+  const [leadsHoje, setLeadsHoje] = useState(0);
 
   // Se o componente pai passar userInfo explicitamente, usamos ele (override).
   // Caso contrário, buscamos o usuário logado direto do SecureStore/token.
@@ -172,10 +174,17 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, us
   // carrega ou caso não seja possível ler o token.
   const displayName = userInfo?.name ?? "Usuário";
 
-  // Carrega os leads reais (leadsStore) — mostra só os 3 mais recentes aqui.
+  // Carrega os leads reais (leadsStore). A lista completa é usada pros
+  // contadores (total e "hoje"); só os 3 mais recentes são exibidos como
+  // cards. Antes, "leadsHoje" era calculado em cima da lista já cortada em
+  // 3 itens (leadsRecentes), então o contador nunca conseguia passar de 3
+  // — esse era o número travado. Agora ele conta em cima de `todos`.
   const carregarLeadsRecentes = useCallback(async () => {
     const todos = await listarLeadsLocais(); // já vem ordenado, mais recentes primeiro
+    const hojeStr = new Date().toLocaleDateString("pt-BR");
+
     setTotalLeads(todos.length);
+    setLeadsHoje(todos.filter((l) => l.dataCriacao === hojeStr).length);
     setLeadsRecentes(todos.slice(0, 3));
   }, []);
 
@@ -184,10 +193,6 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, us
   }, [carregarLeadsRecentes]);
 
   const leadsCard = leadsRecentes.map(paraCardResumido);
-
-  // Nº de leads criados hoje, pra substituir o "3" fixo do card de evento.
-  const hojeStr = new Date().toLocaleDateString("pt-BR");
-  const leadsHoje = leadsRecentes.filter((l) => l.dataCriacao === hojeStr).length;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#F4F4F6" }}>
@@ -304,7 +309,22 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, us
                 lead={lead}
                 onPress={() => {
                   const original = leadsRecentes.find((l) => l.id === lead.id);
-                  if (original) onLeadPress?.(original);
+                  if (!original) return;
+
+                  // Leads já sincronizados com o IFS não podem mais ser
+                  // editados — aqui (diferente da tela de Leads, onde eles
+                  // simplesmente não aparecem) o card ainda é exibido pra
+                  // dar visibilidade do que já foi feito, então só
+                  // bloqueamos a abertura do formulário de edição.
+                  if (original.status === "sync") {
+                    Alert.alert(
+                      "Lead sincronizado",
+                      "Este lead já foi sincronizado com o IFS e não pode ser editado."
+                    );
+                    return;
+                  }
+
+                  onLeadPress?.(original);
                 }}
               />
             ))

@@ -24,7 +24,7 @@ type Potencial = "Alto" | "Médio" | "Baixo";
 interface Props {
   onClose?: () => void;
   onSave?: (data: LeadData) => void;
-  initialData?: Partial<LeadData>;
+  initialData?: Partial<LeadData> & { status?: string };
   mode?: "novo" | "editar";
 }
 
@@ -392,6 +392,22 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
   // se for novo, gera um id uma única vez (não muda a cada render).
   const [leadId] = useState<string>(() => initialData?.id ?? novoIdLocal());
 
+  // Trava de segurança: leads já sincronizados com o IFS não podem ser
+  // editados. Isso normalmente já é garantido pelas telas que abrem este
+  // componente (Leads/Dashboard/Agenda não deixam abrir edição de um lead
+  // "sync"), mas mantemos essa checagem aqui também como última linha de
+  // defesa, caso algum lugar do app ainda passe um lead sincronizado.
+  useEffect(() => {
+    if (isEditing && initialData?.status === "sync") {
+      Alert.alert(
+        "Lead já sincronizado",
+        "Este lead já foi sincronizado com o IFS e não pode mais ser editado.",
+        [{ text: "OK", onPress: () => onClose?.() }]
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Executivo de Vendas real (logado e já validado contra o IFS no login).
   // Vem do cache local — não precisa consultar o IFS de novo aqui.
   const [executivo, setExecutivo] = useState<ExecutivoInfo | null>(null);
@@ -417,16 +433,20 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
   const setData = (partial: Partial<LeadData>) =>
     setDataState((prev) => ({ ...prev, ...partial }));
 
-  const handleSave = async () => {
+  // sincronizar = false  -> só salva localmente (cache), status "pendente",
+  //                          não chama o IFS. Útil pra guardar rascunho.
+  // sincronizar = true   -> salva localmente E tenta criar/atualizar no IFS
+  //                          (fluxo original).
+  const handleSave = async (sincronizar: boolean) => {
     if (!data.nomeEmpresa?.trim()) {
       Alert.alert("Campo obrigatório", "Informe o Nome da Empresa antes de salvar.");
       return;
     }
 
-    if (!executivo) {
+    if (sincronizar && !executivo) {
       Alert.alert(
         "Executivo não identificado",
-        "Não foi possível identificar o Executivo de Vendas responsável. Faça login novamente antes de salvar o lead."
+        "Não foi possível identificar o Executivo de Vendas responsável. Faça login novamente antes de sincronizar o lead."
       );
       return;
     }
@@ -459,10 +479,28 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
       telefone: data.telefone,
       email: data.email,
       executivoSecundario: data.executivoSecundario,
-      mainRepresentativeId: executivo.id,
-      executivoNome: executivo.nome,
+      mainRepresentativeId: executivo?.id,
+      executivoNome: executivo?.nome,
     };
 
+    // ── Só salvar localmente (sem chamar o IFS) ─────────────────────────
+    if (!sincronizar) {
+      try {
+        await upsertLeadLocal(leadLocalBase);
+        Alert.alert(
+          "💾 Lead salvo",
+          `Lead "${data.nomeEmpresa}" salvo localmente como pendente. Você pode sincronizá-lo com o IFS depois, na tela de Leads.`,
+          [{ text: "OK", onPress: () => onSave?.(data) }]
+        );
+      } catch (err) {
+        Alert.alert("Erro", "Não foi possível salvar o lead localmente.");
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    // ── Salvar + sincronizar com o IFS (fluxo original) ─────────────────
     try {
       await upsertLeadLocal(leadLocalBase);
 
@@ -479,7 +517,7 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
         dataCriacao:   data.dataCriacao,
         notasEvento:   data.notasEvento,
         leadDuplicado: data.leadDuplicado,
-        mainRepresentativeId: executivo.id,
+        mainRepresentativeId: executivo!.id,
       });
 
       if (result.success) {
@@ -510,7 +548,7 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
           "❌ Erro ao Sincronizar",
           `${result.error ?? "Não foi possível criar o lead no IFS."}\n\nO lead foi salvo localmente e você pode tentar sincronizar novamente na tela de Leads.`,
           [
-            { text: "Tentar novamente agora", onPress: handleSave },
+            { text: "Tentar novamente agora", onPress: () => handleSave(true) },
             { text: "Salvar e fechar", onPress: () => onSave?.(data) },
           ]
         );
@@ -609,10 +647,10 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
         {renderTab()}
       </KeyboardAvoidingView>
 
-      {/* ── Footer: Cancelar + Salvar ────────────────────────────────────── */}
+      {/* ── Footer: Cancelar + Salvar + Salvar e Sincronizar ──────────────── */}
       <View style={{
         position: "absolute", bottom: 0, left: 0, right: 0,
-        flexDirection: "row", alignItems: "center", gap: 12,
+        flexDirection: "row", alignItems: "center", gap: 10,
         paddingHorizontal: 16, paddingBottom: Platform.OS === "ios" ? 32 : 16, paddingTop: 12,
         backgroundColor: "#F4F4F6",
         borderTopWidth: 1, borderTopColor: "#EBEBEB",
@@ -625,19 +663,41 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
           <Ionicons name="close" size={20} color="#666" />
         </TouchableOpacity>
 
+        {/* Salvar (só localmente, sem chamar o IFS) */}
         <TouchableOpacity
-          onPress={handleSave}
+          onPress={() => handleSave(false)}
           disabled={saving}
-          style={{ flex: 1, height: 52, borderRadius: 28, backgroundColor: "#CC0000", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, shadowColor: "#CC0000", shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 5 }}
+          style={{
+            flex: 1, height: 52, borderRadius: 28, backgroundColor: "#fff",
+            borderWidth: 1.5, borderColor: "#CC0000",
+            flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+            opacity: saving ? 0.6 : 1,
+          }}
+          activeOpacity={0.85}
+        >
+          <MaterialCommunityIcons name="content-save-outline" size={18} color="#CC0000" />
+          <Text style={{ color: "#CC0000", fontWeight: "700", fontSize: 13 }}>Salvar</Text>
+        </TouchableOpacity>
+
+        {/* Salvar e Sincronizar com o IFS */}
+        <TouchableOpacity
+          onPress={() => handleSave(true)}
+          disabled={saving}
+          style={{
+            flex: 1.4, height: 52, borderRadius: 28, backgroundColor: "#CC0000",
+            flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+            shadowColor: "#CC0000", shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 5,
+            opacity: saving ? 0.8 : 1,
+          }}
           activeOpacity={0.85}
         >
           {saving ? (
             <ActivityIndicator color="#fff" size="small" />
           ) : (
             <>
-              <MaterialCommunityIcons name="content-save-outline" size={20} color="#fff" />
-              <Text style={{ color: "#fff", fontWeight: "700", fontSize: 15 }}>
-                {isEditing ? "Atualizar e Sincronizar com IFS" : "Salvar e Sincronizar com IFS"}
+              <Ionicons name="sync" size={18} color="#fff" />
+              <Text style={{ color: "#fff", fontWeight: "700", fontSize: 13 }}>
+                {isEditing ? "Atualizar e Sincronizar" : "Salvar e Sincronizar"}
               </Text>
             </>
           )}

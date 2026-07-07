@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -7,50 +7,45 @@ import {
   SafeAreaView,
   StatusBar,
   Modal,
+  ActivityIndicator,
+  Alert,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import NovoLeadScreen from "./NovoLeadScreen";
+import { LeadLocal, LeadStatus, listarLeadsLocais } from "./leadsStore";
 
-// ─── Dados Mock ───────────────────────────────────────────────────────────────
+// ─── Dados do Evento ──────────────────────────────────────────────────────────
+//
+// Só o que NÃO é derivado de leads fica fixo aqui (nome/local/datas do
+// evento em si). Os números de leads (feitos, meta batida, sync/pendente/
+// erro, progresso) vêm todos do leadsStore agora — nada de mock.
 
-const EVENTO = {
+const EVENTO_INFO = {
   nome: "EBACE 2026",
   subtitulo: "European Business Aviation Convention",
   local: "Palexpo — Genebra · Genebra, Suíça",
   datas: "22–25 JUN 2026",
-  leadsFeitos: 6,
-  metaTotal: 15,
-  progresso: 40,
-  sync: 3,
-  pendente: 2,
-  erro: 1,
-  meta: 15,
 };
 
-type StatusLead = "sync" | "pendente" | "erro";
-type Potencial  = "Alto" | "Médio" | "Baixo";
-type TabEvento  = "resumo" | "leads" | "perfil";
+// Meta de leads do evento. Não existe (ainda) um lugar no backend/IFS de
+// onde ler essa meta, então continua como constante local — mas os
+// valores "batidos até agora" já são 100% reais.
+const META_EVENTO = 15;
 
-interface LeadEvento {
+type Potencial = "Alto" | "Médio" | "Baixo";
+type TabEvento = "resumo" | "leads" | "perfil";
+
+interface LeadEventoCard {
   id: string;
   initials: string;
   bgColor: string;
   empresa: string;
   badge: string;
   contato: string;
-  status: StatusLead;
+  status: LeadStatus;
   segmento: string;
   potencial: Potencial;
 }
-
-const LEADS_EVENTO: LeadEvento[] = [
-  { id:"1", initials:"OR", bgColor:"#2D2D2D", empresa:"ORE INVESTPAR S/A",    badge:"VA12", contato:"ANTONIO SILVA",   status:"sync",     segmento:"Financeiro",     potencial:"Alto"  },
-  { id:"2", initials:"GR", bgColor:"#1A1A2E", empresa:"GRUPO ALPHA EN...",    badge:"VA13", contato:"RENATA CAMPOS",   status:"pendente", segmento:"Energia",        potencial:"Médio" },
-  { id:"3", initials:"MI", bgColor:"#1C3A1C", empresa:"MINERVA AGRO LTDA",   badge:"VA14", contato:"CARLOS EDUARDO",  status:"sync",     segmento:"Agronegócio",    potencial:"Alto"  },
-  { id:"4", initials:"ST", bgColor:"#1A1A5E", empresa:"STELLAR TECH VEN...", badge:"VA15", contato:"AMANDA FERREIRA", status:"erro",     segmento:"Tecnologia",     potencial:"Médio" },
-  { id:"5", initials:"BH", bgColor:"#3A1A2E", empresa:"BLUE HEALTH S/A",     badge:"VA16", contato:"MARCOS LIMA",     status:"sync",     segmento:"Saúde",          potencial:"Alto"  },
-  { id:"6", initials:"IN", bgColor:"#2A2A1A", empresa:"INFRALOG BRASIL",     badge:"VA17", contato:"PAULA MENDES",    status:"pendente", segmento:"Infraestrutura", potencial:"Baixo" },
-];
 
 const SEGMENTOS_CONFIG: Record<string, string> = {
   Financeiro:     "#CC0000",
@@ -66,6 +61,47 @@ const POTENCIAL_CONFIG: Record<Potencial, string> = {
   Médio: "#F59E0B",
   Baixo: "#CC0000",
 };
+
+const CORES_AVATAR = ["#2D2D2D", "#1A1A2E", "#1C3A1C", "#1A1A5E", "#3A1A1A", "#4A1A3A", "#1A3A3A"];
+
+// ─── Helpers de exibição (mesmo padrão de LeadsScreen/DashboardScreen) ────────
+
+function corParaNome(nome: string): string {
+  let hash = 0;
+  for (let i = 0; i < nome.length; i++) {
+    hash = nome.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return CORES_AVATAR[Math.abs(hash) % CORES_AVATAR.length];
+}
+
+function iniciaisEmpresa(nome: string): string {
+  const palavras = nome.trim().split(/\s+/).filter(Boolean);
+  if (palavras.length === 0) return "??";
+  if (palavras.length === 1) return palavras[0].slice(0, 2).toUpperCase();
+  return (palavras[0][0] + palavras[1][0]).toUpperCase();
+}
+
+// Garante que o potencial gravado no lead (string livre no LeadLocal) caia
+// em uma das 3 categorias conhecidas — evita quebrar o donut/barra caso
+// venha algo inesperado.
+function normalizaPotencial(valor: string | undefined): Potencial {
+  if (valor === "Alto" || valor === "Médio" || valor === "Baixo") return valor;
+  return "Médio";
+}
+
+function paraCardEvento(lead: LeadLocal): LeadEventoCard {
+  return {
+    id: lead.id,
+    initials: iniciaisEmpresa(lead.nomeEmpresa || "??"),
+    bgColor: corParaNome(lead.nomeEmpresa || lead.id),
+    empresa: lead.nomeEmpresa || "(Sem nome)",
+    badge: lead.ifsLeadId ? `IFS #${lead.ifsLeadId}` : lead.cnpj || "S/ CNPJ",
+    contato: lead.nomeContato || "—",
+    status: lead.status,
+    segmento: lead.segmento || lead.mercado || "—",
+    potencial: normalizaPotencial(lead.potencial),
+  };
+}
 
 // ─── Donut Chart (pure RN, sem libs) ─────────────────────────────────────────
 
@@ -125,7 +161,7 @@ function DonutChart({ total, slices }: { total: number; slices: { color: string;
 
 // ─── Barra de potencial ───────────────────────────────────────────────────────
 
-function PotencialBar({ leads }: { leads: LeadEvento[] }) {
+function PotencialBar({ leads }: { leads: LeadEventoCard[] }) {
   const total = leads.length;
   const counts = { Alto: 0, Médio: 0, Baixo: 0 } as Record<Potencial, number>;
   leads.forEach((l) => counts[l.potencial]++);
@@ -137,47 +173,76 @@ function PotencialBar({ leads }: { leads: LeadEvento[] }) {
         <Text style={{ fontSize:14, fontWeight:"700", color:"#111" }}>Potencial dos Leads</Text>
       </View>
 
-      {/* Barra segmentada */}
-      <View style={{ flexDirection:"row", height:10, borderRadius:6, overflow:"hidden", marginBottom:12 }}>
-        {(["Alto","Médio","Baixo"] as Potencial[]).map((p) => {
-          const pct = total > 0 ? (counts[p] / total) * 100 : 0;
-          return pct > 0 ? (
-            <View key={p} style={{ width:`${pct}%` as any, backgroundColor:POTENCIAL_CONFIG[p] }} />
-          ) : null;
-        })}
-      </View>
-
-      {/* Legenda */}
-      <View style={{ flexDirection:"row", gap:20 }}>
-        {(["Alto","Médio","Baixo"] as Potencial[]).map((p) => (
-          <View key={p} style={{ flexDirection:"row", alignItems:"center", gap:5 }}>
-            <View style={{ width:8, height:8, borderRadius:4, backgroundColor:POTENCIAL_CONFIG[p] }} />
-            <Text style={{ fontSize:13, color:"#555" }}>{p}</Text>
-            <Text style={{ fontSize:13, fontWeight:"700", color:"#111" }}>{counts[p]}</Text>
+      {total === 0 ? (
+        <Text style={{ fontSize:13, color:"#BBB", textAlign:"center", paddingVertical:12 }}>
+          Nenhum lead cadastrado ainda
+        </Text>
+      ) : (
+        <>
+          {/* Barra segmentada */}
+          <View style={{ flexDirection:"row", height:10, borderRadius:6, overflow:"hidden", marginBottom:12 }}>
+            {(["Alto","Médio","Baixo"] as Potencial[]).map((p) => {
+              const pct = total > 0 ? (counts[p] / total) * 100 : 0;
+              return pct > 0 ? (
+                <View key={p} style={{ width:`${pct}%` as any, backgroundColor:POTENCIAL_CONFIG[p] }} />
+              ) : null;
+            })}
           </View>
-        ))}
-      </View>
+
+          {/* Legenda */}
+          <View style={{ flexDirection:"row", gap:20 }}>
+            {(["Alto","Médio","Baixo"] as Potencial[]).map((p) => (
+              <View key={p} style={{ flexDirection:"row", alignItems:"center", gap:5 }}>
+                <View style={{ width:8, height:8, borderRadius:4, backgroundColor:POTENCIAL_CONFIG[p] }} />
+                <Text style={{ fontSize:13, color:"#555" }}>{p}</Text>
+                <Text style={{ fontSize:13, fontWeight:"700", color:"#111" }}>{counts[p]}</Text>
+              </View>
+            ))}
+          </View>
+        </>
+      )}
     </View>
   );
 }
 
 // ─── Aba: Leads do Evento ─────────────────────────────────────────────────────
+//
+// Mesma regra da tela de Leads: só aparecem aqui leads que ainda NÃO foram
+// sincronizados com o IFS ("pendente"/"erro"). Leads "sync" já estão
+// consolidados no IFS e não podem mais ser editados — por isso não entram
+// nessa listagem (e não há como abrir edição deles a partir daqui).
 
-function TabLeads({ onLeadPress }: { onLeadPress: (l: LeadEvento) => void }) {
-  const statusCfg: Record<StatusLead, { icon: string; color: string; label: string; bg: string }> = {
-    sync:     { icon:"checkmark-circle",     color:"#22C55E", label:"Sync",  bg:"#F0FDF4" },
+function TabLeads({
+  leads,
+  onLeadPress,
+}: {
+  leads: LeadEventoCard[];
+  onLeadPress: (id: string) => void;
+}) {
+  const statusCfg: Record<Exclude<LeadStatus, "sync">, { icon: string; color: string; label: string; bg: string }> = {
     pendente: { icon:"time-outline",         color:"#F59E0B", label:"Pend.", bg:"#FFFBEB" },
     erro:     { icon:"alert-circle-outline", color:"#CC0000", label:"Erro",  bg:"#FFF0F0" },
   };
 
+  if (leads.length === 0) {
+    return (
+      <View style={{ alignItems:"center", paddingTop:60 }}>
+        <Ionicons name="checkmark-done-circle-outline" size={48} color="#DDD" />
+        <Text style={{ color:"#BBB", marginTop:12, fontSize:14, textAlign:"center" }}>
+          Nenhum lead pendente ou com erro{"\n"}neste evento
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <>
-      {LEADS_EVENTO.map((lead) => {
-        const cfg = statusCfg[lead.status];
+      {leads.map((lead) => {
+        const cfg = statusCfg[lead.status as Exclude<LeadStatus, "sync">];
         return (
           <TouchableOpacity
             key={lead.id}
-            onPress={() => onLeadPress(lead)}
+            onPress={() => onLeadPress(lead.id)}
             activeOpacity={0.75}
             style={{ backgroundColor:"#fff", borderRadius:14, paddingHorizontal:16, paddingVertical:14, marginBottom:10, shadowColor:"#000", shadowOpacity:0.05, shadowRadius:4, elevation:1 }}
           >
@@ -214,11 +279,14 @@ function TabLeads({ onLeadPress }: { onLeadPress: (l: LeadEvento) => void }) {
 }
 
 // ─── Aba: Perfil Clientes ─────────────────────────────────────────────────────
+//
+// Análises (segmento/potencial) consideram TODOS os leads reais do evento,
+// inclusive os já sincronizados — é uma visão agregada de reporte, não uma
+// listagem editável, então não faz sentido excluir os sincronizados aqui.
 
-function TabPerfil() {
-  // Contagem por segmento
+function TabPerfil({ leads }: { leads: LeadEventoCard[] }) {
   const segCounts: Record<string, number> = {};
-  LEADS_EVENTO.forEach((l) => {
+  leads.forEach((l) => {
     segCounts[l.segmento] = (segCounts[l.segmento] || 0) + 1;
   });
 
@@ -228,7 +296,7 @@ function TabPerfil() {
     label: seg,
   }));
 
-  const total = LEADS_EVENTO.length;
+  const total = leads.length;
 
   return (
     <>
@@ -239,41 +307,64 @@ function TabPerfil() {
           <Text style={{ fontSize:14, fontWeight:"700", color:"#111" }}>Segmentos de Mercado</Text>
         </View>
 
-        <View style={{ flexDirection:"row", alignItems:"center", gap:20 }}>
-          {/* Donut */}
-          <DonutChart total={total} slices={donutSlices} />
+        {total === 0 ? (
+          <Text style={{ fontSize:13, color:"#BBB", textAlign:"center", paddingVertical:12 }}>
+            Nenhum lead cadastrado ainda
+          </Text>
+        ) : (
+          <View style={{ flexDirection:"row", alignItems:"center", gap:20 }}>
+            {/* Donut */}
+            <DonutChart total={total} slices={donutSlices} />
 
-          {/* Legenda */}
-          <View style={{ flex:1, gap:8 }}>
-            {donutSlices.map((s) => (
-              <View key={s.label} style={{ flexDirection:"row", alignItems:"center", justifyContent:"space-between" }}>
-                <View style={{ flexDirection:"row", alignItems:"center", gap:7 }}>
-                  <View style={{ width:10, height:10, borderRadius:5, backgroundColor:s.color }} />
-                  <Text style={{ fontSize:13, color:"#444" }}>{s.label}</Text>
+            {/* Legenda */}
+            <View style={{ flex:1, gap:8 }}>
+              {donutSlices.map((s) => (
+                <View key={s.label} style={{ flexDirection:"row", alignItems:"center", justifyContent:"space-between" }}>
+                  <View style={{ flexDirection:"row", alignItems:"center", gap:7 }}>
+                    <View style={{ width:10, height:10, borderRadius:5, backgroundColor:s.color }} />
+                    <Text style={{ fontSize:13, color:"#444" }}>{s.label}</Text>
+                  </View>
+                  <Text style={{ fontSize:13, fontWeight:"700", color:"#111" }}>{s.count}</Text>
                 </View>
-                <Text style={{ fontSize:13, fontWeight:"700", color:"#111" }}>{s.count}</Text>
-              </View>
-            ))}
+              ))}
+            </View>
           </View>
-        </View>
+        )}
       </View>
 
       {/* Card Potencial */}
-      <PotencialBar leads={LEADS_EVENTO} />
+      <PotencialBar leads={leads} />
     </>
   );
 }
 
 // ─── Header escuro (fixo) ─────────────────────────────────────────────────────
 
-function EventoHeader({ tab, onTabChange }: { tab: TabEvento; onTabChange: (t: TabEvento) => void }) {
+interface EventoStats {
+  leadsFeitos: number;
+  metaTotal: number;
+  progresso: number;
+  sync: number;
+  pendente: number;
+  erro: number;
+}
+
+function EventoHeader({
+  tab,
+  onTabChange,
+  stats,
+}: {
+  tab: TabEvento;
+  onTabChange: (t: TabEvento) => void;
+  stats: EventoStats;
+}) {
   const LABELS: Record<TabEvento, string> = { resumo:"Resumo", leads:"Leads", perfil:"Perfil Clientes" };
   return (
     <View style={{ backgroundColor:"#111", paddingHorizontal:20, paddingTop:12, paddingBottom:0 }}>
       {/* Topo */}
       <View style={{ flexDirection:"row", alignItems:"center", justifyContent:"space-between", marginBottom:16 }}>
         <Text style={{ fontSize:11, fontWeight:"700", color:"#888", letterSpacing:1, textTransform:"uppercase" }}>
-          EVENTO ATIVO · {EVENTO.datas}
+          EVENTO ATIVO · {EVENTO_INFO.datas}
         </Text>
         <View style={{ flexDirection:"row", alignItems:"center", gap:6, backgroundColor:"#CC0000", borderRadius:20, paddingHorizontal:10, paddingVertical:4 }}>
           <View style={{ width:6, height:6, borderRadius:3, backgroundColor:"#fff" }} />
@@ -281,11 +372,11 @@ function EventoHeader({ tab, onTabChange }: { tab: TabEvento; onTabChange: (t: T
         </View>
       </View>
 
-      <Text style={{ fontSize:28, fontWeight:"800", color:"#fff", marginBottom:4 }}>{EVENTO.nome}</Text>
-      <Text style={{ fontSize:13, color:"#AAA", marginBottom:8 }}>{EVENTO.subtitulo}</Text>
+      <Text style={{ fontSize:28, fontWeight:"800", color:"#fff", marginBottom:4 }}>{EVENTO_INFO.nome}</Text>
+      <Text style={{ fontSize:13, color:"#AAA", marginBottom:8 }}>{EVENTO_INFO.subtitulo}</Text>
       <View style={{ flexDirection:"row", alignItems:"center", gap:6, marginBottom:16 }}>
         <Ionicons name="location-outline" size={14} color="#888" />
-        <Text style={{ fontSize:12, color:"#888" }}>{EVENTO.local}</Text>
+        <Text style={{ fontSize:12, color:"#888" }}>{EVENTO_INFO.local}</Text>
       </View>
 
       <TouchableOpacity style={{ flexDirection:"row", alignItems:"center", gap:8, backgroundColor:"#222", borderRadius:24, paddingHorizontal:16, paddingVertical:10, alignSelf:"flex-start", marginBottom:16, borderWidth:1, borderColor:"#333" }}>
@@ -296,20 +387,20 @@ function EventoHeader({ tab, onTabChange }: { tab: TabEvento; onTabChange: (t: T
 
       {/* Progresso */}
       <View style={{ flexDirection:"row", justifyContent:"space-between", marginBottom:8 }}>
-        <Text style={{ fontSize:13, color:"#AAA" }}>{EVENTO.leadsFeitos} de {EVENTO.metaTotal} leads</Text>
-        <Text style={{ fontSize:13, fontWeight:"700", color:"#CC0000" }}>{EVENTO.progresso}%</Text>
+        <Text style={{ fontSize:13, color:"#AAA" }}>{stats.leadsFeitos} de {stats.metaTotal} leads</Text>
+        <Text style={{ fontSize:13, fontWeight:"700", color:"#CC0000" }}>{stats.progresso}%</Text>
       </View>
       <View style={{ height:5, backgroundColor:"#333", borderRadius:3, overflow:"hidden", marginBottom:16 }}>
-        <View style={{ height:"100%", width:`${EVENTO.progresso}%`, backgroundColor:"#CC0000", borderRadius:3 }} />
+        <View style={{ height:"100%", width:`${stats.progresso}%`, backgroundColor:"#CC0000", borderRadius:3 }} />
       </View>
 
       {/* Stats */}
       <View style={{ flexDirection:"row", gap:10, marginBottom:20 }}>
         {[
-          { value:EVENTO.sync,     label:"Sync",  color:"#22C55E" },
-          { value:EVENTO.pendente, label:"Pend.", color:"#F59E0B" },
-          { value:EVENTO.erro,     label:"Erro",  color:"#CC0000" },
-          { value:EVENTO.meta,     label:"Meta",  color:"#888"    },
+          { value:stats.sync,     label:"Sync",  color:"#22C55E" },
+          { value:stats.pendente, label:"Pend.", color:"#F59E0B" },
+          { value:stats.erro,     label:"Erro",  color:"#CC0000" },
+          { value:stats.metaTotal, label:"Meta", color:"#888"    },
         ].map((s) => (
           <View key={s.label} style={{ flex:1, backgroundColor:"#1C1C1C", borderRadius:12, paddingVertical:12, alignItems:"center", gap:4 }}>
             <Text style={{ fontSize:20, fontWeight:"800", color:s.color }}>{s.value}</Text>
@@ -344,7 +435,58 @@ function EventoHeader({ tab, onTabChange }: { tab: TabEvento; onTabChange: (t: T
 export default function AgendaScreen() {
   const [tab, setTab] = useState<TabEvento>("resumo");
   const [novoLeadVisible, setNovoLeadVisible] = useState(false);
-  const [leadEditando, setLeadEditando] = useState<LeadEvento | null>(null);
+  const [leadEditando, setLeadEditando] = useState<LeadLocal | null>(null);
+  const [leads, setLeads] = useState<LeadLocal[]>([]);
+  const [carregando, setCarregando] = useState(true);
+
+  const carregarLeads = useCallback(async () => {
+    const lista = await listarLeadsLocais();
+    setLeads(lista);
+    setCarregando(false);
+  }, []);
+
+  useEffect(() => {
+    carregarLeads();
+  }, [carregarLeads]);
+
+  // Cards derivados dos leads reais (todos, pra estatísticas/perfil).
+  const leadsCard = leads.map(paraCardEvento);
+
+  // Só os não sincronizados entram na aba "Leads" (editável).
+  const leadsEditaveis = leadsCard.filter((l) => l.status !== "sync");
+
+  const total = leads.length;
+  const syncCount = leads.filter((l) => l.status === "sync").length;
+  const pendenteCount = leads.filter((l) => l.status === "pendente").length;
+  const erroCount = leads.filter((l) => l.status === "erro").length;
+  const progresso = total > 0 ? Math.min(Math.round((total / META_EVENTO) * 100), 100) : 0;
+
+  const stats: EventoStats = {
+    leadsFeitos: total,
+    metaTotal: META_EVENTO,
+    progresso,
+    sync: syncCount,
+    pendente: pendenteCount,
+    erro: erroCount,
+  };
+
+  const handleLeadPress = (id: string) => {
+    const original = leads.find((l) => l.id === id);
+    if (!original) return;
+
+    // Defesa extra: como `leadsEditaveis` já filtra os sincronizados, isso
+    // na prática nunca deveria disparar — mas mantemos o aviso por
+    // segurança, igual ao padrão usado no Dashboard.
+    if (original.status === "sync") {
+      Alert.alert(
+        "Lead sincronizado",
+        "Este lead já foi sincronizado com o IFS e não pode ser editado."
+      );
+      return;
+    }
+
+    setLeadEditando(original);
+  };
 
   return (
     <SafeAreaView style={{ flex:1, backgroundColor:"#111" }}>
@@ -352,75 +494,90 @@ export default function AgendaScreen() {
 
       {/* Modais */}
       <Modal visible={novoLeadVisible} animationType="slide" presentationStyle="fullScreen">
-        <NovoLeadScreen onClose={() => setNovoLeadVisible(false)} onSave={() => setNovoLeadVisible(false)} />
+        <NovoLeadScreen
+          onClose={() => setNovoLeadVisible(false)}
+          onSave={() => {
+            setNovoLeadVisible(false);
+            carregarLeads();
+          }}
+        />
       </Modal>
       <Modal visible={leadEditando !== null} animationType="slide" presentationStyle="fullScreen">
         <NovoLeadScreen
           mode="editar"
-          initialData={leadEditando ? { nomeEmpresa:leadEditando.empresa, nomeContato:leadEditando.contato, mercado:leadEditando.segmento } : undefined}
+          initialData={leadEditando ?? undefined}
           onClose={() => setLeadEditando(null)}
-          onSave={() => setLeadEditando(null)}
+          onSave={() => {
+            setLeadEditando(null);
+            carregarLeads();
+          }}
         />
       </Modal>
 
       {/* Header fixo escuro */}
-      <EventoHeader tab={tab} onTabChange={setTab} />
+      <EventoHeader tab={tab} onTabChange={setTab} stats={stats} />
 
       {/* Conteúdo rolável branco */}
-      <ScrollView
-        style={{ flex:1, backgroundColor:"#F4F4F6" }}
-        contentContainerStyle={{ padding:16, paddingBottom:100 }}
-        showsVerticalScrollIndicator={false}
-      >
-        {tab === "resumo" && (
-          <>
-            {/* Meta */}
-            <View style={{ backgroundColor:"#fff", borderRadius:16, padding:16, marginBottom:12, shadowColor:"#000", shadowOpacity:0.05, shadowRadius:4, elevation:1 }}>
-              <View style={{ flexDirection:"row", alignItems:"center", gap:8, marginBottom:16 }}>
-                <MaterialCommunityIcons name="target" size={18} color="#CC0000" />
-                <Text style={{ fontSize:14, fontWeight:"700", color:"#111" }}>Meta do Evento</Text>
+      {carregando ? (
+        <View style={{ flex:1, backgroundColor:"#F4F4F6", alignItems:"center", justifyContent:"center" }}>
+          <ActivityIndicator size="large" color="#CC0000" />
+        </View>
+      ) : (
+        <ScrollView
+          style={{ flex:1, backgroundColor:"#F4F4F6" }}
+          contentContainerStyle={{ padding:16, paddingBottom:100 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {tab === "resumo" && (
+            <>
+              {/* Meta */}
+              <View style={{ backgroundColor:"#fff", borderRadius:16, padding:16, marginBottom:12, shadowColor:"#000", shadowOpacity:0.05, shadowRadius:4, elevation:1 }}>
+                <View style={{ flexDirection:"row", alignItems:"center", gap:8, marginBottom:16 }}>
+                  <MaterialCommunityIcons name="target" size={18} color="#CC0000" />
+                  <Text style={{ fontSize:14, fontWeight:"700", color:"#111" }}>Meta do Evento</Text>
+                </View>
+                <View style={{ flexDirection:"row" }}>
+                  {[
+                    { value:stats.leadsFeitos,                         label:"Capturados", color:"#CC0000" },
+                    { value:stats.metaTotal,                           label:"Meta Total", color:"#111"   },
+                    { value:Math.max(stats.metaTotal - stats.leadsFeitos, 0), label:"Restantes",  color:"#22C55E" },
+                  ].map((item, i) => (
+                    <View key={item.label} style={{ flex:1, alignItems:"center", borderLeftWidth:i>0?1:0, borderLeftColor:"#F0F0F0" }}>
+                      <Text style={{ fontSize:28, fontWeight:"800", color:item.color }}>{item.value}</Text>
+                      <Text style={{ fontSize:12, color:"#999", marginTop:4 }}>{item.label}</Text>
+                    </View>
+                  ))}
+                </View>
               </View>
-              <View style={{ flexDirection:"row" }}>
+
+              {/* Sync IFS */}
+              <View style={{ backgroundColor:"#fff", borderRadius:16, padding:16, shadowColor:"#000", shadowOpacity:0.05, shadowRadius:4, elevation:1 }}>
+                <View style={{ flexDirection:"row", alignItems:"center", gap:8, marginBottom:16 }}>
+                  <MaterialCommunityIcons name="sync" size={18} color="#555" />
+                  <Text style={{ fontSize:14, fontWeight:"700", color:"#111" }}>Status de Sincronização IFS</Text>
+                </View>
                 {[
-                  { value:EVENTO.leadsFeitos,                     label:"Capturados", color:"#CC0000" },
-                  { value:EVENTO.metaTotal,                       label:"Meta Total", color:"#111"   },
-                  { value:EVENTO.metaTotal - EVENTO.leadsFeitos,  label:"Restantes",  color:"#22C55E" },
-                ].map((item, i) => (
-                  <View key={item.label} style={{ flex:1, alignItems:"center", borderLeftWidth:i>0?1:0, borderLeftColor:"#F0F0F0" }}>
-                    <Text style={{ fontSize:28, fontWeight:"800", color:item.color }}>{item.value}</Text>
-                    <Text style={{ fontSize:12, color:"#999", marginTop:4 }}>{item.label}</Text>
+                  { icon:"checkmark-circle",     color:"#22C55E", label:"Sincronizados com IFS",    value:stats.sync },
+                  { icon:"time-outline",         color:"#F59E0B", label:"Aguardando Sincronização", value:stats.pendente },
+                  { icon:"alert-circle-outline", color:"#CC0000", label:"Erro — Requer Atenção",    value:stats.erro },
+                ].map((item) => (
+                  <View key={item.label} style={{ flexDirection:"row", alignItems:"center", justifyContent:"space-between", paddingVertical:12, borderTopWidth:1, borderTopColor:"#F5F5F5" }}>
+                    <View style={{ flexDirection:"row", alignItems:"center", gap:10 }}>
+                      <Ionicons name={item.icon as any} size={18} color={item.color} />
+                      <Text style={{ fontSize:14, color:"#444" }}>{item.label}</Text>
+                    </View>
+                    <Text style={{ fontSize:15, fontWeight:"700", color:item.color }}>{item.value}</Text>
                   </View>
                 ))}
               </View>
-            </View>
+            </>
+          )}
 
-            {/* Sync IFS */}
-            <View style={{ backgroundColor:"#fff", borderRadius:16, padding:16, shadowColor:"#000", shadowOpacity:0.05, shadowRadius:4, elevation:1 }}>
-              <View style={{ flexDirection:"row", alignItems:"center", gap:8, marginBottom:16 }}>
-                <MaterialCommunityIcons name="sync" size={18} color="#555" />
-                <Text style={{ fontSize:14, fontWeight:"700", color:"#111" }}>Status de Sincronização IFS</Text>
-              </View>
-              {[
-                { icon:"checkmark-circle",     color:"#22C55E", label:"Sincronizados com IFS",    value:EVENTO.sync },
-                { icon:"time-outline",         color:"#F59E0B", label:"Aguardando Sincronização", value:EVENTO.pendente },
-                { icon:"alert-circle-outline", color:"#CC0000", label:"Erro — Requer Atenção",    value:EVENTO.erro },
-              ].map((item) => (
-                <View key={item.label} style={{ flexDirection:"row", alignItems:"center", justifyContent:"space-between", paddingVertical:12, borderTopWidth:1, borderTopColor:"#F5F5F5" }}>
-                  <View style={{ flexDirection:"row", alignItems:"center", gap:10 }}>
-                    <Ionicons name={item.icon as any} size={18} color={item.color} />
-                    <Text style={{ fontSize:14, color:"#444" }}>{item.label}</Text>
-                  </View>
-                  <Text style={{ fontSize:15, fontWeight:"700", color:item.color }}>{item.value}</Text>
-                </View>
-              ))}
-            </View>
-          </>
-        )}
+          {tab === "leads" && <TabLeads leads={leadsEditaveis} onLeadPress={handleLeadPress} />}
 
-        {tab === "leads" && <TabLeads onLeadPress={setLeadEditando} />}
-
-        {tab === "perfil" && <TabPerfil />}
-      </ScrollView>
+          {tab === "perfil" && <TabPerfil leads={leadsCard} />}
+        </ScrollView>
+      )}
 
       {/* FAB */}
       <TouchableOpacity

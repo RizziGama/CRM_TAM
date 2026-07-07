@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
 import { criarLeadIFS, getExecutivoCache, ExecutivoInfo } from "./ifsService";
+import { LeadLocal, novoIdLocal, upsertLeadLocal } from "./leadsStore";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,7 @@ interface LeadData {
   telefone: string;
   email: string;
   executivoSecundario: string;
+  id?: string; // ID do registro local (leadsStore) — presente ao editar
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -386,6 +388,10 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
     ...initialData,
   });
 
+  // ID local estável — se for edição, reaproveita o id do lead existente;
+  // se for novo, gera um id uma única vez (não muda a cada render).
+  const [leadId] = useState<string>(() => initialData?.id ?? novoIdLocal());
+
   // Executivo de Vendas real (logado e já validado contra o IFS no login).
   // Vem do cache local — não precisa consultar o IFS de novo aqui.
   const [executivo, setExecutivo] = useState<ExecutivoInfo | null>(null);
@@ -426,7 +432,40 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
     }
 
     setSaving(true);
+
+    const agora = new Date().toISOString();
+
+    // Monta o registro local. Salvamos ANTES de chamar a API, como
+    // "pendente" — assim o lead nunca se perde, mesmo se o app fechar ou a
+    // rede cair no meio do caminho. Se já existir (edição), preserva
+    // criadoEm/ifsLeadId originais.
+    const leadLocalBase: LeadLocal = {
+      id: leadId,
+      status: "pendente",
+      criadoEm: initialData?.id ? (initialData as any).criadoEm ?? agora : agora,
+      atualizadoEm: agora,
+      cnpj: data.cnpj,
+      nomeEmpresa: data.nomeEmpresa,
+      nomeContato: data.nomeContato,
+      idioma: data.idioma,
+      pais: data.pais,
+      origem: data.origem,
+      mercado: data.mercado,
+      segmento: data.segmento,
+      potencial: data.potencial,
+      dataCriacao: data.dataCriacao,
+      leadDuplicado: data.leadDuplicado,
+      notasEvento: data.notasEvento,
+      telefone: data.telefone,
+      email: data.email,
+      executivoSecundario: data.executivoSecundario,
+      mainRepresentativeId: executivo.id,
+      executivoNome: executivo.nome,
+    };
+
     try {
+      await upsertLeadLocal(leadLocalBase);
+
       const result = await criarLeadIFS({
         nomeEmpresa:   data.nomeEmpresa,
         nomeContato:   data.nomeContato,
@@ -444,23 +483,51 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
       });
 
       if (result.success) {
+        await upsertLeadLocal({
+          ...leadLocalBase,
+          status: "sync",
+          ifsLeadId: result.leadId,
+          erro: undefined,
+          atualizadoEm: new Date().toISOString(),
+        });
+
         Alert.alert(
           "✅ Lead Criado!",
           `Lead "${data.nomeEmpresa}" sincronizado com o IFS.${result.leadId ? "\nID: " + result.leadId : ""}`,
           [{ text: "OK", onPress: () => onSave?.(data) }]
         );
       } else {
+        // Não deu certo, mas o lead JÁ ESTÁ salvo localmente como "erro" —
+        // dá pra reenviar depois, sem perder o que foi digitado.
+        await upsertLeadLocal({
+          ...leadLocalBase,
+          status: "erro",
+          erro: result.error,
+          atualizadoEm: new Date().toISOString(),
+        });
+
         Alert.alert(
           "❌ Erro ao Sincronizar",
-          result.error ?? "Não foi possível criar o lead no IFS.",
+          `${result.error ?? "Não foi possível criar o lead no IFS."}\n\nO lead foi salvo localmente e você pode tentar sincronizar novamente na tela de Leads.`,
           [
-            { text: "Tentar novamente", onPress: handleSave },
-            { text: "Cancelar", style: "cancel" },
+            { text: "Tentar novamente agora", onPress: handleSave },
+            { text: "Salvar e fechar", onPress: () => onSave?.(data) },
           ]
         );
       }
     } catch (err) {
-      Alert.alert("Erro inesperado", "Tente novamente.");
+      // Falha inesperada (ex.: exceção fora do criarLeadIFS) — ainda assim
+      // o lead já ficou salvo localmente como "pendente" acima.
+      await upsertLeadLocal({
+        ...leadLocalBase,
+        status: "erro",
+        erro: "Erro inesperado ao sincronizar.",
+        atualizadoEm: new Date().toISOString(),
+      });
+      Alert.alert(
+        "Erro inesperado",
+        "O lead foi salvo localmente. Tente sincronizar novamente na tela de Leads."
+      );
     } finally {
       setSaving(false);
     }

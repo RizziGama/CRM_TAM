@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -8,15 +8,22 @@ import {
   SafeAreaView,
   StatusBar,
   Modal,
+  ActivityIndicator,
+  Alert,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import NovoLeadScreen from "./NovoLeadScreen";
+import { criarLeadIFS, getExecutivoCache } from "./ifsService";
+import {
+  LeadLocal,
+  LeadStatus,
+  listarLeadsLocais,
+  upsertLeadLocal,
+} from "./leadsStore";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
-type StatusLead = "sync" | "pendente" | "erro";
-
-interface Lead {
+interface LeadCardData {
   id: string;
   initials: string;
   bgColor: string;
@@ -24,79 +31,48 @@ interface Lead {
   badge: string;
   contato: string;
   mercado: string;
-  status: StatusLead;
+  status: LeadStatus;
   data: string;
   nota: string;
 }
 
-// ─── Dados Mock ───────────────────────────────────────────────────────────────
+// ─── Helpers de exibição ────────────────────────────────────────────────────────
 
-const LEADS_DATA: Lead[] = [
-  {
-    id: "1",
-    initials: "OR",
-    bgColor: "#2D2D2D",
-    empresa: "ORE INVESTPAR S/A",
-    badge: "VA12",
-    contato: "ANTONIO SILVA",
-    mercado: "FINANCE - Financeiro",
-    status: "sync",
-    data: "22/06/2026",
-    nota: '"Cliente interessado em fretamento executivo mensal."',
-  },
-  {
-    id: "2",
-    initials: "GR",
-    bgColor: "#1A1A2E",
-    empresa: "GRUPO ALPHA ENERGIA",
-    badge: "VA13",
-    contato: "RENATA CAMPOS",
-    mercado: "ENERGY - Energia",
-    status: "pendente",
-    data: "22/06/2026",
-    nota: '"Reunião agendada para próxima semana."',
-  },
-  {
-    id: "3",
-    initials: "MI",
-    bgColor: "#1C3A1C",
-    empresa: "MINERVA AGRO LTDA",
-    badge: "VA14",
-    contato: "CARLOS EDUARDO",
-    mercado: "AGRO - Agronegócio",
-    status: "erro",
-    data: "22/06/2026",
-    nota: '"Verificar CNPJ — divergência no cadastro."',
-  },
-  {
-    id: "4",
-    initials: "BT",
-    bgColor: "#1A1A5E",
-    empresa: "BLUE TECH AVIATION",
-    badge: "VA15",
-    contato: "MARIANA SOUZA",
-    mercado: "TECH - Tecnologia",
-    status: "sync",
-    data: "23/06/2026",
-    nota: '"Interesse em jato executivo para rotas internacionais."',
-  },
-  {
-    id: "5",
-    initials: "CR",
-    bgColor: "#3A1A1A",
-    empresa: "CONSTRUX REAL ESTATE",
-    badge: "VA16",
-    contato: "FABIO MENDES",
-    mercado: "REAL ESTATE - Imóveis",
-    status: "pendente",
-    data: "23/06/2026",
-    nota: '"Aguardando retorno do departamento financeiro."',
-  },
-];
+const CORES_AVATAR = ["#2D2D2D", "#1A1A2E", "#1C3A1C", "#1A1A5E", "#3A1A1A", "#4A1A3A", "#1A3A3A"];
+
+function corParaNome(nome: string): string {
+  let hash = 0;
+  for (let i = 0; i < nome.length; i++) {
+    hash = nome.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return CORES_AVATAR[Math.abs(hash) % CORES_AVATAR.length];
+}
+
+function iniciaisEmpresa(nome: string): string {
+  const palavras = nome.trim().split(/\s+/).filter(Boolean);
+  if (palavras.length === 0) return "??";
+  if (palavras.length === 1) return palavras[0].slice(0, 2).toUpperCase();
+  return (palavras[0][0] + palavras[1][0]).toUpperCase();
+}
+
+function paraCard(lead: LeadLocal): LeadCardData {
+  return {
+    id: lead.id,
+    initials: iniciaisEmpresa(lead.nomeEmpresa || "??"),
+    bgColor: corParaNome(lead.nomeEmpresa || lead.id),
+    empresa: lead.nomeEmpresa || "(Sem nome)",
+    badge: lead.ifsLeadId ? `IFS #${lead.ifsLeadId}` : lead.cnpj || "S/ CNPJ",
+    contato: lead.nomeContato || "—",
+    mercado: lead.mercado || "—",
+    status: lead.status,
+    data: lead.dataCriacao,
+    nota: lead.notasEvento ? `"${lead.notasEvento}"` : "",
+  };
+}
 
 // ─── Sub-componentes ──────────────────────────────────────────────────────────
 
-const StatusBadge: React.FC<{ status: StatusLead }> = ({ status }) => {
+const StatusBadge: React.FC<{ status: LeadStatus }> = ({ status }) => {
   const config = {
     sync: { icon: "checkmark-circle", color: "#22C55E", label: "Sincronizado com IFS", bg: "#F0FDF4" },
     pendente: { icon: "time-outline", color: "#F59E0B", label: "Aguardando Sync", bg: "#FFFBEB" },
@@ -111,7 +87,12 @@ const StatusBadge: React.FC<{ status: StatusLead }> = ({ status }) => {
   );
 };
 
-const LeadCard: React.FC<{ lead: Lead; onPress: () => void }> = ({ lead, onPress }) => (
+const LeadCard: React.FC<{
+  lead: LeadCardData;
+  onPress: () => void;
+  onRetry: () => void;
+  sincronizando: boolean;
+}> = ({ lead, onPress, onRetry, sincronizando }) => (
   <TouchableOpacity
     onPress={onPress}
     activeOpacity={0.75}
@@ -143,7 +124,7 @@ const LeadCard: React.FC<{ lead: Lead; onPress: () => void }> = ({ lead, onPress
       </View>
     </View>
 
-    {/* Linha 2: Status + Data */}
+    {/* Linha 2: Status + Data + Reenviar */}
     <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginVertical: 10 }}>
       <StatusBadge status={lead.status} />
       <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
@@ -151,6 +132,27 @@ const LeadCard: React.FC<{ lead: Lead; onPress: () => void }> = ({ lead, onPress
         <Text style={{ fontSize: 12, color: "#AAA" }}>{lead.data}</Text>
       </View>
     </View>
+
+    {lead.status !== "sync" && (
+      <TouchableOpacity
+        onPress={onRetry}
+        disabled={sincronizando}
+        activeOpacity={0.7}
+        style={{
+          flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+          backgroundColor: "#F4F4F6", borderRadius: 10, paddingVertical: 9, marginBottom: lead.nota ? 10 : 0,
+        }}
+      >
+        {sincronizando ? (
+          <ActivityIndicator size="small" color="#CC0000" />
+        ) : (
+          <Ionicons name="sync" size={14} color="#CC0000" />
+        )}
+        <Text style={{ fontSize: 12.5, fontWeight: "700", color: "#CC0000" }}>
+          {sincronizando ? "Sincronizando..." : "Tentar sincronizar novamente"}
+        </Text>
+      </TouchableOpacity>
+    )}
 
     {/* Linha 3: Nota */}
     {lead.nota ? (
@@ -163,7 +165,7 @@ const LeadCard: React.FC<{ lead: Lead; onPress: () => void }> = ({ lead, onPress
 
 // ─── Tela Principal ───────────────────────────────────────────────────────────
 
-type Filtro = "todos" | StatusLead;
+type Filtro = "todos" | LeadStatus;
 
 const FILTROS: { key: Filtro; label: string }[] = [
   { key: "todos", label: "Todos" },
@@ -176,18 +178,96 @@ export default function LeadsScreen() {
   const [search, setSearch] = useState("");
   const [filtro, setFiltro] = useState<Filtro>("todos");
   const [novoLeadVisible, setNovoLeadVisible] = useState(false);
-  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [selectedLead, setSelectedLead] = useState<LeadLocal | null>(null);
+  const [leads, setLeads] = useState<LeadLocal[]>([]);
+  const [carregando, setCarregando] = useState(true);
+  const [sincronizandoId, setSincronizandoId] = useState<string | null>(null);
 
-  const leadsFiltrados = useMemo(() => {
-    return LEADS_DATA.filter((lead) => {
-      const matchFiltro = filtro === "todos" || lead.status === filtro;
-      const matchSearch =
-        search === "" ||
-        lead.empresa.toLowerCase().includes(search.toLowerCase()) ||
-        lead.contato.toLowerCase().includes(search.toLowerCase());
-      return matchFiltro && matchSearch;
-    });
-  }, [filtro, search]);
+  const carregarLeads = useCallback(async () => {
+    const lista = await listarLeadsLocais();
+    setLeads(lista);
+    setCarregando(false);
+  }, []);
+
+  // Carrega a lista ao montar a tela. Depois disso, a lista é atualizada
+  // manualmente via carregarLeads() nos callbacks onSave dos modais (criar,
+  // editar, reenviar) — não há navegação por rotas nesse app pra usar um
+  // "focus effect" automático.
+  useEffect(() => {
+    carregarLeads();
+  }, [carregarLeads]);
+
+  const leadsCard = leads.map(paraCard);
+
+  const leadsFiltrados = leadsCard.filter((lead) => {
+    const matchFiltro = filtro === "todos" || lead.status === filtro;
+    const matchSearch =
+      search === "" ||
+      lead.empresa.toLowerCase().includes(search.toLowerCase()) ||
+      lead.contato.toLowerCase().includes(search.toLowerCase());
+    return matchFiltro && matchSearch;
+  });
+
+  const handleRetry = async (leadId: string) => {
+    const lead = leads.find((l) => l.id === leadId);
+    if (!lead) return;
+
+    setSincronizandoId(leadId);
+    try {
+      // Usa o executivo já gravado no lead (quem criou originalmente); se
+      // não tiver por algum motivo, cai pro executivo logado agora.
+      let mainRepresentativeId = lead.mainRepresentativeId;
+      if (!mainRepresentativeId) {
+        const executivoAtual = await getExecutivoCache();
+        mainRepresentativeId = executivoAtual?.id;
+      }
+
+      const result = await criarLeadIFS({
+        nomeEmpresa: lead.nomeEmpresa,
+        nomeContato: lead.nomeContato,
+        cnpj: lead.cnpj,
+        idioma: lead.idioma,
+        pais: lead.pais,
+        origem: lead.origem,
+        mercado: lead.mercado,
+        segmento: lead.segmento,
+        potencial: lead.potencial,
+        dataCriacao: lead.dataCriacao,
+        notasEvento: lead.notasEvento,
+        leadDuplicado: lead.leadDuplicado,
+        mainRepresentativeId,
+      });
+
+      if (result.success) {
+        await upsertLeadLocal({
+          ...lead,
+          status: "sync",
+          ifsLeadId: result.leadId,
+          erro: undefined,
+          atualizadoEm: new Date().toISOString(),
+        });
+      } else {
+        await upsertLeadLocal({
+          ...lead,
+          status: "erro",
+          erro: result.error,
+          atualizadoEm: new Date().toISOString(),
+        });
+        Alert.alert("Erro ao sincronizar", result.error ?? "Tente novamente mais tarde.");
+      }
+    } catch (err) {
+      await upsertLeadLocal({
+        ...lead,
+        status: "erro",
+        erro: "Erro inesperado ao sincronizar.",
+        atualizadoEm: new Date().toISOString(),
+      });
+      Alert.alert("Erro inesperado", "Tente novamente mais tarde.");
+    } finally {
+      setSincronizandoId(null);
+      carregarLeads();
+    }
+  };
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#F4F4F6" }}>
@@ -197,7 +277,10 @@ export default function LeadsScreen() {
       <Modal visible={novoLeadVisible} animationType="slide" presentationStyle="fullScreen">
         <NovoLeadScreen
           onClose={() => setNovoLeadVisible(false)}
-          onSave={() => setNovoLeadVisible(false)}
+          onSave={() => {
+            setNovoLeadVisible(false);
+            carregarLeads();
+          }}
         />
       </Modal>
 
@@ -205,15 +288,12 @@ export default function LeadsScreen() {
       <Modal visible={selectedLead !== null} animationType="slide" presentationStyle="fullScreen">
         <NovoLeadScreen
           mode="editar"
-          initialData={selectedLead ? {
-            nomeEmpresa: selectedLead.empresa,
-            nomeContato: selectedLead.contato,
-            mercado: selectedLead.mercado,
-            notasEvento: selectedLead.nota.replace(/"/g, ""),
-            dataCriacao: selectedLead.data,
-          } : undefined}
+          initialData={selectedLead ?? undefined}
           onClose={() => setSelectedLead(null)}
-          onSave={() => setSelectedLead(null)}
+          onSave={() => {
+            setSelectedLead(null);
+            carregarLeads();
+          }}
         />
       </Modal>
 
@@ -221,7 +301,7 @@ export default function LeadsScreen() {
       <View style={{ paddingHorizontal: 20, paddingTop: 14, paddingBottom: 10 }}>
         <Text style={{ fontSize: 24, fontWeight: "800", color: "#111" }}>Pipeline de Leads</Text>
         <Text style={{ fontSize: 13, color: "#888", marginTop: 2 }}>
-          {LEADS_DATA.length} prospects cadastrados
+          {leads.length} prospects cadastrados
         </Text>
       </View>
 
@@ -253,7 +333,7 @@ export default function LeadsScreen() {
       >
         {FILTROS.map((f) => {
           const active = filtro === f.key;
-          const count = f.key === "todos" ? LEADS_DATA.length : LEADS_DATA.filter((l) => l.status === f.key).length;
+          const count = f.key === "todos" ? leadsCard.length : leadsCard.filter((l) => l.status === f.key).length;
           return (
             <TouchableOpacity
               key={f.key}
@@ -280,21 +360,38 @@ export default function LeadsScreen() {
       </ScrollView>
 
       {/* ── Lista de Leads ────────────────────────────────────────────────── */}
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 100 }}
-      >
-        {leadsFiltrados.length === 0 ? (
-          <View style={{ alignItems: "center", paddingTop: 60 }}>
-            <Ionicons name="search-outline" size={48} color="#DDD" />
-            <Text style={{ color: "#BBB", marginTop: 12, fontSize: 15 }}>Nenhum lead encontrado</Text>
-          </View>
-        ) : (
-          leadsFiltrados.map((lead) => (
-            <LeadCard key={lead.id} lead={lead} onPress={() => setSelectedLead(lead)} />
-          ))
-        )}
-      </ScrollView>
+      {carregando ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator size="large" color="#CC0000" />
+        </View>
+      ) : (
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 100 }}
+        >
+          {leadsFiltrados.length === 0 ? (
+            <View style={{ alignItems: "center", paddingTop: 60 }}>
+              <Ionicons name="search-outline" size={48} color="#DDD" />
+              <Text style={{ color: "#BBB", marginTop: 12, fontSize: 15 }}>
+                {leads.length === 0 ? "Nenhum lead cadastrado ainda" : "Nenhum lead encontrado"}
+              </Text>
+            </View>
+          ) : (
+            leadsFiltrados.map((lead) => (
+              <LeadCard
+                key={lead.id}
+                lead={lead}
+                sincronizando={sincronizandoId === lead.id}
+                onPress={() => {
+                  const original = leads.find((l) => l.id === lead.id) ?? null;
+                  setSelectedLead(original);
+                }}
+                onRetry={() => handleRetry(lead.id)}
+              />
+            ))
+          )}
+        </ScrollView>
+      )}
 
       {/* ── FAB ─────────────────────────────────────────────────────────── */}
       <TouchableOpacity

@@ -7,18 +7,11 @@ import LeadsScreen from "./LeadsScreen";
 import NovoLeadScreen from "./NovoLeadScreen";
 import { AzureUserInfo, getUserInfo } from "@/components/azureAuth";
 import { UserMenu } from "@/components/UserMenu";
+import { LeadLocal } from "./leadsStore";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
 type Tab = "dashboard" | "agenda" | "leads";
-
-interface LeadParaEditar {
-  nomeEmpresa: string;
-  nomeContato: string;
-  mercado: string;
-  notasEvento: string;
-  dataCriacao: string;
-}
 
 interface AppMainProps {
   onLogout?: () => void;
@@ -70,7 +63,7 @@ function BottomTabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) =>
 
 export default function AppMain({ onLogout }: AppMainProps) {
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
-  const [leadEditando, setLeadEditando] = useState<LeadParaEditar | null>(null);
+  const [leadEditando, setLeadEditando] = useState<LeadLocal | null>(null);
   const [userInfo, setUserInfo] = useState<AzureUserInfo | null>(null);
 
   // Carrega os dados reais do usuário Microsoft autenticado (nome, e-mail,
@@ -80,7 +73,7 @@ export default function AppMain({ onLogout }: AppMainProps) {
   }, []);
 
   // Chamado pelo DashboardScreen ao clicar num lead
-  const handleLeadPress = (lead: LeadParaEditar) => {
+  const handleLeadPress = (lead: LeadLocal) => {
     setLeadEditando(lead);
   };
 

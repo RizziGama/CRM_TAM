@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
 import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
 import NovoLeadScreen from "./NovoLeadScreen";
 import { AzureUserInfo, getUserInfo } from "@/components/azureAuth";
+import { LeadLocal, listarLeadsLocais } from "./leadsStore";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -40,12 +41,12 @@ interface EventData {
 // ─── Props ───────────────────────────────────────────────────────────────────
 
 interface DashboardProps {
-  onLeadPress?: (lead: { nomeEmpresa: string; nomeContato: string; mercado: string; notasEvento: string; dataCriacao: string }) => void;
+  onLeadPress?: (lead: LeadLocal) => void;
   onVerTodos?: () => void;
   userInfo?: AzureUserInfo | null;
 }
 
-// ─── Dados Mock ───────────────────────────────────────────────────────────────
+// ─── Dados Mock do Evento (isso continua fixo — não é um "lead") ──────────────
 
 const EVENT: EventData = {
   name: "EBACE 2026",
@@ -59,10 +60,36 @@ const EVENT: EventData = {
   encerramento: "25/06/2026",
 };
 
-const LEADS: Lead[] = [
-  { id: "1", initials: "OR", company: "ORE INVESTPAR S/A", contact: "ANTONIO SILVA", date: "22/06/2026", synced: true, bgColor: "#2D2D2D" },
-  { id: "2", initials: "GR", company: "GRUPO ALPHA ENERGIA", contact: "RENATA CAMPOS", date: "22/06/2026", synced: false, bgColor: "#1A1A2E" },
-];
+// ─── Helpers de exibição (mesma lógica usada em LeadsScreen) ──────────────────
+
+const CORES_AVATAR = ["#2D2D2D", "#1A1A2E", "#1C3A1C", "#1A1A5E", "#3A1A1A", "#4A1A3A", "#1A3A3A"];
+
+function corParaNome(nome: string): string {
+  let hash = 0;
+  for (let i = 0; i < nome.length; i++) {
+    hash = nome.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return CORES_AVATAR[Math.abs(hash) % CORES_AVATAR.length];
+}
+
+function iniciaisEmpresa(nome: string): string {
+  const palavras = nome.trim().split(/\s+/).filter(Boolean);
+  if (palavras.length === 0) return "??";
+  if (palavras.length === 1) return palavras[0].slice(0, 2).toUpperCase();
+  return (palavras[0][0] + palavras[1][0]).toUpperCase();
+}
+
+function paraCardResumido(lead: LeadLocal): Lead {
+  return {
+    id: lead.id,
+    initials: iniciaisEmpresa(lead.nomeEmpresa || "??"),
+    company: lead.nomeEmpresa || "(Sem nome)",
+    contact: lead.nomeContato || "—",
+    date: lead.dataCriacao,
+    synced: lead.status === "sync",
+    bgColor: corParaNome(lead.nomeEmpresa || lead.id),
+  };
+}
 
 // ─── Sub-componentes ──────────────────────────────────────────────────────────
 
@@ -117,6 +144,8 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, us
   const [search, setSearch] = useState("");
   const [novoLeadVisible, setNovoLeadVisible] = useState(false);
   const [userInfoState, setUserInfoState] = useState<AzureUserInfo | null>(null);
+  const [leadsRecentes, setLeadsRecentes] = useState<LeadLocal[]>([]);
+  const [totalLeads, setTotalLeads] = useState(0);
 
   // Se o componente pai passar userInfo explicitamente, usamos ele (override).
   // Caso contrário, buscamos o usuário logado direto do SecureStore/token.
@@ -143,6 +172,23 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, us
   // carrega ou caso não seja possível ler o token.
   const displayName = userInfo?.name ?? "Usuário";
 
+  // Carrega os leads reais (leadsStore) — mostra só os 3 mais recentes aqui.
+  const carregarLeadsRecentes = useCallback(async () => {
+    const todos = await listarLeadsLocais(); // já vem ordenado, mais recentes primeiro
+    setTotalLeads(todos.length);
+    setLeadsRecentes(todos.slice(0, 3));
+  }, []);
+
+  useEffect(() => {
+    carregarLeadsRecentes();
+  }, [carregarLeadsRecentes]);
+
+  const leadsCard = leadsRecentes.map(paraCardResumido);
+
+  // Nº de leads criados hoje, pra substituir o "3" fixo do card de evento.
+  const hojeStr = new Date().toLocaleDateString("pt-BR");
+  const leadsHoje = leadsRecentes.filter((l) => l.dataCriacao === hojeStr).length;
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#F4F4F6" }}>
       <StatusBar barStyle="dark-content" backgroundColor="#F4F4F6" />
@@ -150,7 +196,10 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, us
       <Modal visible={novoLeadVisible} animationType="slide" presentationStyle="fullScreen">
         <NovoLeadScreen
           onClose={() => setNovoLeadVisible(false)}
-          onSave={() => setNovoLeadVisible(false)}
+          onSave={() => {
+            setNovoLeadVisible(false);
+            carregarLeadsRecentes();
+          }}
         />
       </Modal>
 
@@ -206,8 +255,8 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, us
           <View style={{ flex: 1, backgroundColor: "#fff", borderRadius: 14, padding: 18, shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 }}>
             <MaterialCommunityIcons name="account-group-outline" size={20} color="#CC0000" style={{ marginBottom: 8 }} />
             <Text style={{ fontSize: 11, fontWeight: "600", color: "#999", letterSpacing: 0.8 }}>LEADS HOJE</Text>
-            <Text style={{ fontSize: 36, fontWeight: "800", color: "#111", marginTop: 4 }}>{EVENT.leadsHoje}</Text>
-            <Text style={{ fontSize: 12, color: "#22C55E", fontWeight: "600", marginTop: 4 }}>+{EVENT.deltaLeads} desde manhã</Text>
+            <Text style={{ fontSize: 36, fontWeight: "800", color: "#111", marginTop: 4 }}>{leadsHoje}</Text>
+            <Text style={{ fontSize: 12, color: "#22C55E", fontWeight: "600", marginTop: 4 }}>{totalLeads} no total</Text>
           </View>
           <View style={{ flex: 1, backgroundColor: "#CC0000", borderRadius: 14, padding: 18, shadowColor: "#CC0000", shadowOpacity: 0.35, shadowRadius: 8, elevation: 4 }}>
             <View style={{ width: 36, height: 36, borderRadius: 18, borderWidth: 2, borderColor: "rgba(255,255,255,0.5)", alignItems: "center", justifyContent: "center", marginBottom: 8 }}>
@@ -215,7 +264,7 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, us
             </View>
             <Text style={{ fontSize: 11, fontWeight: "600", color: "rgba(255,255,255,0.8)", letterSpacing: 0.8 }}>META DO EVENTO</Text>
             <Text style={{ fontSize: 36, fontWeight: "800", color: "#fff", marginTop: 4 }}>{EVENT.meta}</Text>
-            <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.8)", marginTop: 2 }}>{EVENT.restantes} restantes</Text>
+            <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.8)", marginTop: 2 }}>{Math.max(EVENT.meta - totalLeads, 0)} restantes</Text>
           </View>
         </View>
 
@@ -223,13 +272,15 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, us
         <View style={{ backgroundColor: "#fff", borderRadius: 14, padding: 16, marginBottom: 24, shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 4, elevation: 1 }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 10 }}>
             <Text style={{ fontWeight: "700", fontSize: 14, color: "#111" }}>Progresso — {EVENT.name}</Text>
-            <Text style={{ fontWeight: "700", fontSize: 14, color: "#CC0000" }}>{EVENT.progresso}%</Text>
+            <Text style={{ fontWeight: "700", fontSize: 14, color: "#CC0000" }}>
+              {Math.min(Math.round((totalLeads / EVENT.meta) * 100), 100)}%
+            </Text>
           </View>
           <View style={{ height: 6, backgroundColor: "#F0F0F0", borderRadius: 3, overflow: "hidden", marginBottom: 10 }}>
-            <View style={{ height: "100%", width: `${EVENT.progresso}%`, backgroundColor: "#CC0000", borderRadius: 3 }} />
+            <View style={{ height: "100%", width: `${Math.min((totalLeads / EVENT.meta) * 100, 100)}%`, backgroundColor: "#CC0000", borderRadius: 3 }} />
           </View>
           <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-            <Text style={{ fontSize: 12, color: "#999" }}>{EVENT.leadsFeitos} de {EVENT.meta} leads</Text>
+            <Text style={{ fontSize: 12, color: "#999" }}>{totalLeads} de {EVENT.meta} leads</Text>
             <Text style={{ fontSize: 12, color: "#999" }}>Encerra: {EVENT.encerramento}</Text>
           </View>
         </View>
@@ -242,19 +293,22 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, us
               <Text style={{ fontSize: 13, color: "#CC0000", fontWeight: "600" }}>Ver todos</Text>
             </TouchableOpacity>
           </View>
-          {LEADS.map((lead) => (
-            <LeadCard
-              key={lead.id}
-              lead={lead}
-              onPress={() => onLeadPress?.({
-                nomeEmpresa: lead.company,
-                nomeContato: lead.contact,
-                mercado: "",
-                notasEvento: "",
-                dataCriacao: lead.date,
-              })}
-            />
-          ))}
+          {leadsCard.length === 0 ? (
+            <Text style={{ fontSize: 13, color: "#BBB", textAlign: "center", paddingVertical: 24 }}>
+              Nenhum lead cadastrado ainda
+            </Text>
+          ) : (
+            leadsCard.map((lead) => (
+              <LeadCard
+                key={lead.id}
+                lead={lead}
+                onPress={() => {
+                  const original = leadsRecentes.find((l) => l.id === lead.id);
+                  if (original) onLeadPress?.(original);
+                }}
+              />
+            ))
+          )}
         </View>
       </ScrollView>
 

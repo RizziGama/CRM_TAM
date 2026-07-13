@@ -82,6 +82,12 @@ export default function AppMain({ onLogout }: AppMainProps) {
     setActiveTab("leads");
   };
 
+  // Chamado pelo DashboardScreen ao clicar no banner do evento — leva
+  // direto pra aba Agenda, onde dá pra trocar/editar o evento ativo.
+  const handleAbrirEvento = () => {
+    setActiveTab("agenda");
+  };
+
   const renderScreen = () => {
     switch (activeTab) {
       case "dashboard":
@@ -89,6 +95,7 @@ export default function AppMain({ onLogout }: AppMainProps) {
           <DashboardScreen
             onLeadPress={handleLeadPress}
             onVerTodos={handleVerTodos}
+            onAbrirEvento={handleAbrirEvento}
             userInfo={userInfo}
           />
         );

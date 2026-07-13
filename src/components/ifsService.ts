@@ -13,11 +13,13 @@
 // Adicione .env ao .gitignore.)
 
 import * as SecureStore from "expo-secure-store";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const IFS_HOST = "https://tamifssup.avcweb.com.br:443/int/ifsapplications/projection/v1";
 
 const IFS_BASE_URL = `${IFS_HOST}/BusinessLeadHandling.svc`;
 const IFS_REPRESENTATIVE_URL = `${IFS_HOST}/BusinessRepresentativeHandling.svc`;
+const IFS_EVENTOS_URL = `${IFS_HOST}/custProjEventLead.svc`;
 
 const IFS_USER = process.env.EXPO_PUBLIC_IFS_USER ?? "INTEGRACAO";
 const IFS_PASS = process.env.EXPO_PUBLIC_IFS_PASS ?? "";
@@ -46,7 +48,20 @@ export interface ExecutivoInfo {
   ativo: boolean;    // Objstate === "Active"
 }
 
+// Evento de captação de leads (EventosLeadsSet no IFS).
+export interface EventoLead {
+  objkey: string;          // Objkey — identificador único do registro no IFS
+  eventId: number | null;  // Cf_Event_Id
+  nome: string;            // Cf_Nome_Evento
+  dataEvento: string;      // Cf_Data_Evento — "YYYY-MM-DD"
+  metaLeads: number;       // Cf_Meta_Leasds
+  leadsRealizados: number | null; // Cf_Leads_Realizados (vindo do IFS, se houver)
+  observacao: string;      // Cf_Observacao
+  status: string;          // Cf_Status
+}
+
 const EXECUTIVO_CACHE_KEY = "executivoInfo";
+const EVENTO_SELECIONADO_KEY = "eventoSelecionado";
 
 // ─── Mapeamentos ──────────────────────────────────────────────────────────────
 
@@ -150,6 +165,67 @@ export async function getExecutivoCache(): Promise<ExecutivoInfo | null> {
 
 export async function clearExecutivoCache(): Promise<void> {
   await SecureStore.deleteItemAsync(EXECUTIVO_CACHE_KEY);
+}
+
+// ─── Eventos de Captação de Leads ───────────────────────────────────────────────
+//
+// Busca a lista de eventos cadastrados no IFS (EventosLeadsSet). Usado na tela
+// de Agenda para permitir trocar/selecionar o evento ativo.
+
+export async function buscarEventosIFS(): Promise<EventoLead[]> {
+  try {
+    const url = `${IFS_EVENTOS_URL}/EventosLeadsSet`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Accept": "application/json",
+        "Authorization": basicAuth,
+      },
+    });
+
+    if (!response.ok) {
+      console.warn(`[IFS] Falha ao buscar eventos: HTTP ${response.status}`);
+      return [];
+    }
+
+    const json = await response.json();
+    const lista: any[] = json?.value ?? [];
+
+    return lista.map((ev) => ({
+      objkey: ev.Objkey,
+      eventId: ev.Cf_Event_Id ?? null,
+      nome: ev.Cf_Nome_Evento?.trim() || "Evento sem nome",
+      dataEvento: ev.Cf_Data_Evento ?? "",
+      metaLeads: typeof ev.Cf_Meta_Leasds === "number" ? ev.Cf_Meta_Leasds : 0,
+      leadsRealizados:
+        typeof ev.Cf_Leads_Realizados === "number" ? ev.Cf_Leads_Realizados : null,
+      observacao: ev.Cf_Observacao ?? "",
+      status: ev.Cf_Status ?? "",
+    }));
+  } catch (err) {
+    console.error("[IFS] Erro ao buscar eventos:", err);
+    return [];
+  }
+}
+
+// ─── Cache local do Evento selecionado ─────────────────────────────────────────
+//
+// Guarda qual evento o usuário escolheu como "ativo" na tela de Agenda, para
+// que a seleção sobreviva entre aberturas do app (até trocar de novo).
+
+export async function cacheEventoSelecionado(evento: EventoLead): Promise<void> {
+  await AsyncStorage.setItem(EVENTO_SELECIONADO_KEY, JSON.stringify(evento));
+}
+
+export async function getEventoSelecionadoCache(): Promise<EventoLead | null> {
+  try {
+    const stored = await AsyncStorage.getItem(EVENTO_SELECIONADO_KEY);
+    if (!stored) return null;
+    return JSON.parse(stored) as EventoLead;
+  } catch {
+    return null;
+  }
 }
 
 // ─── Criar Lead ───────────────────────────────────────────────────────────────

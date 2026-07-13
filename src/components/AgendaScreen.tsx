@@ -7,30 +7,26 @@ import {
   SafeAreaView,
   StatusBar,
   Modal,
+  Pressable,
   ActivityIndicator,
   Alert,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import NovoLeadScreen from "./NovoLeadScreen";
 import { LeadLocal, LeadStatus, listarLeadsLocais } from "./leadsStore";
+import {
+  EventoLead,
+  buscarEventosIFS,
+  cacheEventoSelecionado,
+  getEventoSelecionadoCache,
+} from "./ifsService";
 
-// ─── Dados do Evento ──────────────────────────────────────────────────────────
+// ─── Meta de fallback ─────────────────────────────────────────────────────────
 //
-// Só o que NÃO é derivado de leads fica fixo aqui (nome/local/datas do
-// evento em si). Os números de leads (feitos, meta batida, sync/pendente/
-// erro, progresso) vêm todos do leadsStore agora — nada de mock.
-
-const EVENTO_INFO = {
-  nome: "EBACE 2026",
-  subtitulo: "European Business Aviation Convention",
-  local: "Palexpo — Genebra · Genebra, Suíça",
-  datas: "22–25 JUN 2026",
-};
-
-// Meta de leads do evento. Não existe (ainda) um lugar no backend/IFS de
-// onde ler essa meta, então continua como constante local — mas os
-// valores "batidos até agora" já são 100% reais.
-const META_EVENTO = 15;
+// Usada só enquanto nenhum evento foi carregado/selecionado ainda (ex.: sem
+// rede na primeira abertura). Assim que a lista de eventos do IFS carrega,
+// a meta real do evento selecionado (Cf_Meta_Leasds) passa a valer.
+const META_FALLBACK = 15;
 
 type Potencial = "Alto" | "Médio" | "Baixo";
 type TabEvento = "resumo" | "leads" | "perfil";
@@ -101,6 +97,20 @@ function paraCardEvento(lead: LeadLocal): LeadEventoCard {
     segmento: lead.segmento || lead.mercado || "—",
     potencial: normalizaPotencial(lead.potencial),
   };
+}
+
+// "YYYY-MM-DD" → "DD MMM YYYY" (ex.: "04 AGO 2026"). Aceita vazio/valores
+// inválidos e cai num traço em vez de quebrar a tela.
+const MESES_ABREV = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"];
+
+function formatarDataEvento(dataISO: string | undefined): string {
+  if (!dataISO) return "—";
+  const partes = dataISO.split("-");
+  if (partes.length !== 3) return dataISO;
+  const [ano, mes, dia] = partes;
+  const mesIdx = parseInt(mes, 10) - 1;
+  const mesLabel = MESES_ABREV[mesIdx] ?? mes;
+  return `${dia} ${mesLabel} ${ano}`;
 }
 
 // ─── Donut Chart (pure RN, sem libs) ─────────────────────────────────────────
@@ -338,6 +348,98 @@ function TabPerfil({ leads }: { leads: LeadEventoCard[] }) {
   );
 }
 
+// ─── Modal: Seletor de Eventos ────────────────────────────────────────────────
+//
+// Lista os eventos vindos do IFS (EventosLeadsSet). Ao tocar num item, o
+// evento vira o "ativo" da tela — a seleção fica salva localmente e volta a
+// aparecer mesmo se o app for fechado e reaberto.
+
+function SeletorEventoModal({
+  visible,
+  onClose,
+  eventos,
+  eventoAtual,
+  carregando,
+  onSelecionar,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  eventos: EventoLead[];
+  eventoAtual: EventoLead | null;
+  carregando: boolean;
+  onSelecionar: (evento: EventoLead) => void;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable
+        style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", paddingHorizontal: 20 }}
+        onPress={onClose}
+      >
+        <Pressable
+          onPress={(e) => e.stopPropagation()}
+          style={{ backgroundColor: "#fff", borderRadius: 20, maxHeight: "70%", overflow: "hidden" }}
+        >
+          <View style={{ paddingHorizontal: 20, paddingTop: 18, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: "#F0F0F0" }}>
+            <Text style={{ fontSize: 16, fontWeight: "800", color: "#111" }}>Selecionar Evento</Text>
+            <Text style={{ fontSize: 12, color: "#999", marginTop: 2 }}>Eventos cadastrados no IFS</Text>
+          </View>
+
+          {carregando ? (
+            <View style={{ paddingVertical: 40, alignItems: "center" }}>
+              <ActivityIndicator size="large" color="#CC0000" />
+            </View>
+          ) : eventos.length === 0 ? (
+            <View style={{ paddingVertical: 40, alignItems: "center", paddingHorizontal: 20 }}>
+              <Ionicons name="calendar-outline" size={40} color="#DDD" />
+              <Text style={{ color: "#BBB", marginTop: 10, fontSize: 13, textAlign: "center" }}>
+                Nenhum evento encontrado no IFS
+              </Text>
+            </View>
+          ) : (
+            <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+              {eventos.map((ev) => {
+                const ativo = eventoAtual?.objkey === ev.objkey;
+                return (
+                  <TouchableOpacity
+                    key={ev.objkey}
+                    onPress={() => onSelecionar(ev)}
+                    activeOpacity={0.7}
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      paddingHorizontal: 20,
+                      paddingVertical: 14,
+                      borderBottomWidth: 1,
+                      borderBottomColor: "#F5F5F5",
+                      backgroundColor: ativo ? "#FFF5F5" : "#fff",
+                    }}
+                  >
+                    <View style={{ flex: 1, marginRight: 10 }}>
+                      <Text style={{ fontSize: 14.5, fontWeight: "700", color: "#111" }} numberOfLines={1}>
+                        {ev.nome}
+                      </Text>
+                      <Text style={{ fontSize: 12, color: "#888", marginTop: 2 }}>
+                        {formatarDataEvento(ev.dataEvento)} · Meta: {ev.metaLeads}
+                      </Text>
+                      {ev.observacao ? (
+                        <Text style={{ fontSize: 11, color: "#AAA", marginTop: 2 }} numberOfLines={1}>
+                          {ev.observacao}
+                        </Text>
+                      ) : null}
+                    </View>
+                    {ativo && <Ionicons name="checkmark-circle" size={20} color="#CC0000" />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          )}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 // ─── Header escuro (fixo) ─────────────────────────────────────────────────────
 
 interface EventoStats {
@@ -353,37 +455,46 @@ function EventoHeader({
   tab,
   onTabChange,
   stats,
+  eventoAtual,
+  carregandoEventos,
+  onAbrirSeletor,
 }: {
   tab: TabEvento;
   onTabChange: (t: TabEvento) => void;
   stats: EventoStats;
+  eventoAtual: EventoLead | null;
+  carregandoEventos: boolean;
+  onAbrirSeletor: () => void;
 }) {
   const LABELS: Record<TabEvento, string> = { resumo:"Resumo", leads:"Leads", perfil:"Perfil Clientes" };
   return (
-    <View style={{ backgroundColor:"#111", paddingHorizontal:20, paddingTop:12, paddingBottom:0 }}>
-      {/* Topo */}
-      <View style={{ flexDirection:"row", alignItems:"center", justifyContent:"space-between", marginBottom:16 }}>
-        <Text style={{ fontSize:11, fontWeight:"700", color:"#888", letterSpacing:1, textTransform:"uppercase" }}>
-          EVENTO ATIVO · {EVENTO_INFO.datas}
-        </Text>
-        <View style={{ flexDirection:"row", alignItems:"center", gap:6, backgroundColor:"#CC0000", borderRadius:20, paddingHorizontal:10, paddingVertical:4 }}>
-          <View style={{ width:6, height:6, borderRadius:3, backgroundColor:"#fff" }} />
-          <Text style={{ fontSize:11, fontWeight:"700", color:"#fff" }}>AO VIVO</Text>
-        </View>
-      </View>
-
-      <Text style={{ fontSize:28, fontWeight:"800", color:"#fff", marginBottom:4 }}>{EVENTO_INFO.nome}</Text>
-      <Text style={{ fontSize:13, color:"#AAA", marginBottom:8 }}>{EVENTO_INFO.subtitulo}</Text>
-      <View style={{ flexDirection:"row", alignItems:"center", gap:6, marginBottom:16 }}>
-        <Ionicons name="location-outline" size={14} color="#888" />
-        <Text style={{ fontSize:12, color:"#888" }}>{EVENTO_INFO.local}</Text>
-      </View>
-
-      <TouchableOpacity style={{ flexDirection:"row", alignItems:"center", gap:8, backgroundColor:"#222", borderRadius:24, paddingHorizontal:16, paddingVertical:10, alignSelf:"flex-start", marginBottom:16, borderWidth:1, borderColor:"#333" }}>
-        <MaterialCommunityIcons name="pencil-outline" size={15} color="#ccc" />
-        <Text style={{ fontSize:13, fontWeight:"600", color:"#ccc" }}>Alterar evento</Text>
-        <Ionicons name="chevron-down" size={14} color="#888" />
+    <View style={{ backgroundColor:"#111", paddingHorizontal:20, paddingTop:20, paddingBottom:0 }}>
+      {/* Nome do evento — clicável, abre a lista de eventos disponíveis */}
+      <TouchableOpacity
+        onPress={onAbrirSeletor}
+        activeOpacity={0.7}
+        style={{ flexDirection:"row", alignItems:"center", gap:8, marginBottom:4 }}
+      >
+        {carregandoEventos && !eventoAtual ? (
+          <ActivityIndicator size="small" color="#fff" />
+        ) : (
+          <Text style={{ fontSize:28, fontWeight:"800", color:"#fff" }} numberOfLines={1}>
+            {eventoAtual?.nome ?? "Selecionar evento"}
+          </Text>
+        )}
+        <Ionicons name="chevron-down" size={20} color="#888" />
       </TouchableOpacity>
+
+      {eventoAtual?.observacao ? (
+        <Text style={{ fontSize:13, color:"#AAA", marginBottom:8 }} numberOfLines={2}>
+          {eventoAtual.observacao}
+        </Text>
+      ) : null}
+
+      <View style={{ flexDirection:"row", alignItems:"center", gap:6, marginBottom:16 }}>
+        <Ionicons name="calendar-outline" size={14} color="#888" />
+        <Text style={{ fontSize:12, color:"#888" }}>{formatarDataEvento(eventoAtual?.dataEvento)}</Text>
+      </View>
 
       {/* Progresso */}
       <View style={{ flexDirection:"row", justifyContent:"space-between", marginBottom:8 }}>
@@ -439,6 +550,12 @@ export default function AgendaScreen() {
   const [leads, setLeads] = useState<LeadLocal[]>([]);
   const [carregando, setCarregando] = useState(true);
 
+  // ── Eventos (IFS) ────────────────────────────────────────────────────────
+  const [eventos, setEventos] = useState<EventoLead[]>([]);
+  const [eventoAtual, setEventoAtual] = useState<EventoLead | null>(null);
+  const [carregandoEventos, setCarregandoEventos] = useState(true);
+  const [seletorVisible, setSeletorVisible] = useState(false);
+
   const carregarLeads = useCallback(async () => {
     const lista = await listarLeadsLocais();
     setLeads(lista);
@@ -448,6 +565,57 @@ export default function AgendaScreen() {
   useEffect(() => {
     carregarLeads();
   }, [carregarLeads]);
+
+  // Carrega o evento cacheado (última seleção do usuário) e, em paralelo,
+  // busca a lista atual de eventos no IFS. Se ainda não houver nenhum
+  // evento selecionado, assume o primeiro da lista retornada como padrão.
+  const carregarEventos = useCallback(async () => {
+    setCarregandoEventos(true);
+    try {
+      const [cache, lista] = await Promise.all([
+        getEventoSelecionadoCache(),
+        buscarEventosIFS(),
+      ]);
+
+      setEventos(lista);
+
+      if (cache) {
+        // Se o evento cacheado ainda existir na lista atual, usa a versão
+        // mais recente vinda do IFS (meta/observação podem ter mudado);
+        // senão, mantém o que estava salvo.
+        const atualizado = lista.find((e) => e.objkey === cache.objkey);
+        setEventoAtual(atualizado ?? cache);
+      } else if (lista.length > 0) {
+        setEventoAtual(lista[0]);
+        await cacheEventoSelecionado(lista[0]);
+      }
+    } catch (err) {
+      console.warn("[AgendaScreen] Falha ao carregar eventos:", err);
+    } finally {
+      setCarregandoEventos(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    carregarEventos();
+  }, [carregarEventos]);
+
+  const handleSelecionarEvento = async (evento: EventoLead) => {
+    setEventoAtual(evento);
+    setSeletorVisible(false);
+    try {
+      await cacheEventoSelecionado(evento);
+    } catch (err) {
+      console.warn("[AgendaScreen] Falha ao salvar evento selecionado:", err);
+    }
+  };
+
+  const handleAbrirSeletor = () => {
+    setSeletorVisible(true);
+    // Atualiza a lista toda vez que o seletor é aberto, garantindo que
+    // eventos criados/alterados no IFS apareçam sem precisar sair da tela.
+    carregarEventos();
+  };
 
   // Cards derivados dos leads reais (todos, pra estatísticas/perfil).
   const leadsCard = leads.map(paraCardEvento);
@@ -459,11 +627,13 @@ export default function AgendaScreen() {
   const syncCount = leads.filter((l) => l.status === "sync").length;
   const pendenteCount = leads.filter((l) => l.status === "pendente").length;
   const erroCount = leads.filter((l) => l.status === "erro").length;
-  const progresso = total > 0 ? Math.min(Math.round((total / META_EVENTO) * 100), 100) : 0;
+
+  const metaTotal = eventoAtual?.metaLeads && eventoAtual.metaLeads > 0 ? eventoAtual.metaLeads : META_FALLBACK;
+  const progresso = total > 0 ? Math.min(Math.round((total / metaTotal) * 100), 100) : 0;
 
   const stats: EventoStats = {
     leadsFeitos: total,
-    metaTotal: META_EVENTO,
+    metaTotal,
     progresso,
     sync: syncCount,
     pendente: pendenteCount,
@@ -492,7 +662,7 @@ export default function AgendaScreen() {
     <SafeAreaView style={{ flex:1, backgroundColor:"#111" }}>
       <StatusBar barStyle="light-content" backgroundColor="#111" />
 
-      {/* Modais */}
+      {/* Modais de lead */}
       <Modal visible={novoLeadVisible} animationType="slide" presentationStyle="fullScreen">
         <NovoLeadScreen
           onClose={() => setNovoLeadVisible(false)}
@@ -514,8 +684,25 @@ export default function AgendaScreen() {
         />
       </Modal>
 
+      {/* Modal: seletor de eventos */}
+      <SeletorEventoModal
+        visible={seletorVisible}
+        onClose={() => setSeletorVisible(false)}
+        eventos={eventos}
+        eventoAtual={eventoAtual}
+        carregando={carregandoEventos}
+        onSelecionar={handleSelecionarEvento}
+      />
+
       {/* Header fixo escuro */}
-      <EventoHeader tab={tab} onTabChange={setTab} stats={stats} />
+      <EventoHeader
+        tab={tab}
+        onTabChange={setTab}
+        stats={stats}
+        eventoAtual={eventoAtual}
+        carregandoEventos={carregandoEventos}
+        onAbrirSeletor={handleAbrirSeletor}
+      />
 
       {/* Conteúdo rolável branco */}
       {carregando ? (

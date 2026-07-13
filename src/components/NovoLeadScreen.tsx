@@ -18,7 +18,6 @@ import { LeadLocal, novoIdLocal, upsertLeadLocal } from "./leadsStore";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
-type Tab = "diversos" | "contatos" | "atividades" | "executivos";
 type Potencial = "Alto" | "Médio" | "Baixo";
 
 interface Props {
@@ -49,13 +48,54 @@ interface LeadData {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const formatCNPJ = (value: string): string => {
+// Aplica máscara de CPF (11 dígitos) enquanto o usuário digita; a partir do
+// 12º dígito, passa a aplicar a máscara de CNPJ automaticamente — assim o
+// mesmo campo aceita os dois documentos sem precisar de um seletor separado.
+const formatCpfCnpj = (value: string): string => {
   const digits = value.replace(/\D/g, "").slice(0, 14);
-  if (digits.length <= 2) return digits;
-  if (digits.length <= 5) return `${digits.slice(0, 2)}.${digits.slice(2)}`;
-  if (digits.length <= 8) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5)}`;
+
+  if (digits.length <= 11) {
+    // Máscara de CPF: 000.000.000-00
+    if (digits.length <= 3) return digits;
+    if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
+    if (digits.length <= 9) return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+    return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+  }
+
+  // Máscara de CNPJ: 00.000.000/0000-00
   if (digits.length <= 12) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8)}`;
   return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
+};
+
+// Diz se o valor digitado (só dígitos) já corresponde a um CPF (11) ou
+// CNPJ (14) completo — útil pra validação antes de salvar, se precisar.
+const isCpfCnpjCompleto = (value: string): boolean => {
+  const digits = value.replace(/\D/g, "");
+  return digits.length === 11 || digits.length === 14;
+};
+
+// Máscara de telefone: alterna sozinha entre celular (11 dígitos —
+// "(00) 00000-0000") e fixo (10 dígitos — "(00) 0000-0000") conforme a
+// quantidade de números digitados.
+const formatTelefone = (value: string): string => {
+  const digits = value.replace(/\D/g, "").slice(0, 11);
+
+  if (digits.length === 0) return "";
+  if (digits.length <= 2) return `(${digits}`;
+  if (digits.length <= 6) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
+  if (digits.length <= 10) {
+    return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+  }
+  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+};
+
+// Validação simples de e-mail: exige "algo@algo.algo". Campo vazio é
+// considerado válido (e-mail é opcional) — só acusa erro se o usuário
+// digitou algo e faltar o "@"/domínio.
+const isEmailValido = (email: string): boolean => {
+  const valor = email.trim();
+  if (!valor) return true;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valor);
 };
 
 const formatDate = (): string => {
@@ -86,17 +126,27 @@ const InputField: React.FC<{
   onChangeText: (v: string) => void;
   keyboardType?: any;
   autoCapitalize?: any;
-}> = ({ placeholder, value, onChangeText, keyboardType = "default", autoCapitalize = "words" }) => (
-  <View style={{ backgroundColor: "#F4F4F6", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, marginBottom: 10 }}>
-    <TextInput
-      placeholder={placeholder}
-      placeholderTextColor="#BBBBBB"
-      value={value}
-      onChangeText={onChangeText}
-      keyboardType={keyboardType}
-      autoCapitalize={autoCapitalize}
-      style={{ fontSize: 15, color: "#111", padding: 0 }}
-    />
+  error?: boolean;
+  errorText?: string;
+}> = ({ placeholder, value, onChangeText, keyboardType = "default", autoCapitalize = "words", error = false, errorText }) => (
+  <View style={{ marginBottom: 10 }}>
+    <View style={{
+      backgroundColor: "#F4F4F6", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14,
+      borderWidth: error ? 1.5 : 0, borderColor: error ? "#CC0000" : "transparent",
+    }}>
+      <TextInput
+        placeholder={placeholder}
+        placeholderTextColor="#BBBBBB"
+        value={value}
+        onChangeText={onChangeText}
+        keyboardType={keyboardType}
+        autoCapitalize={autoCapitalize}
+        style={{ fontSize: 15, color: "#111", padding: 0 }}
+      />
+    </View>
+    {error && errorText ? (
+      <Text style={{ fontSize: 11, color: "#CC0000", marginTop: 4, marginLeft: 4 }}>{errorText}</Text>
+    ) : null}
   </View>
 );
 
@@ -161,9 +211,9 @@ const CardExecutivo: React.FC<{ executivo: ExecutivoInfo | null; carregando: boo
   </View>
 );
 
-// ─── Aba: Diversos ────────────────────────────────────────────────────────────
+// ─── Conteúdo do formulário (antes era a aba "Diversos"; agora é a tela toda) ─
 
-const TabDiversos: React.FC<{
+const LeadFormContent: React.FC<{
   data: LeadData;
   setData: (d: Partial<LeadData>) => void;
   executivo: ExecutivoInfo | null;
@@ -172,17 +222,14 @@ const TabDiversos: React.FC<{
   <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
     {/* Card principal */}
     <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
-      {/* CNPJ com máscara */}
-      <View style={{ backgroundColor: "#F4F4F6", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, marginBottom: 10 }}>
-        <TextInput
-          placeholder="CNPJ"
-          placeholderTextColor="#BBBBBB"
-          value={data.cnpj}
-          onChangeText={(v) => setData({ cnpj: formatCNPJ(v) })}
-          keyboardType="numeric"
-          style={{ fontSize: 15, color: "#111", padding: 0 }}
-        />
-      </View>
+      {/* CPF/CNPJ com máscara dinâmica (troca sozinha conforme a qtd. de dígitos) */}
+      <InputField
+        placeholder="CPF / CNPJ"
+        value={data.cnpj}
+        onChangeText={(v) => setData({ cnpj: formatCpfCnpj(v) })}
+        keyboardType="numeric"
+        autoCapitalize="none"
+      />
 
       <InputField
         placeholder="Nome da Empresa"
@@ -194,6 +241,23 @@ const TabDiversos: React.FC<{
         placeholder="Nome do Contato"
         value={data.nomeContato}
         onChangeText={(v) => setData({ nomeContato: v })}
+      />
+
+      <InputField
+        placeholder="Telefone"
+        value={data.telefone}
+        onChangeText={(v) => setData({ telefone: formatTelefone(v) })}
+        keyboardType="phone-pad"
+        autoCapitalize="none"
+      />
+      <InputField
+        placeholder="E-mail do Contato"
+        value={data.email}
+        onChangeText={(v) => setData({ email: v })}
+        keyboardType="email-address"
+        autoCapitalize="none"
+        error={!isEmailValido(data.email)}
+        errorText="Informe um e-mail válido (ex.: nome@dominio.com)"
       />
 
       {/* Idioma + País */}
@@ -233,7 +297,7 @@ const TabDiversos: React.FC<{
         <View style={{ flexDirection: "row", gap: 8 }}>
           {(["Alto", "Médio", "Baixo"] as Potencial[]).map((p) => {
             const active = data.potencial === p;
-            const activeColor = p === "Alto" ? "#CC0000" : p === "Médio" ? "#F59E0B" : "#6B7280";
+            const activeColor = p === "Alto" ? "#22C55E" : p === "Médio" ? "#F59E0B" : "#CC0000";
             return (
               <TouchableOpacity
                 key={p}
@@ -264,109 +328,14 @@ const TabDiversos: React.FC<{
         </View>
       </View>
 
-      {/* Lead Duplicado */}
-      <TouchableOpacity
-        onPress={() => setData({ leadDuplicado: !data.leadDuplicado })}
-        style={{ flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: "#F4F4F6", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, marginBottom: 14 }}
-        activeOpacity={0.7}
-      >
-        <View style={{
-          width: 18, height: 18, borderRadius: 4, borderWidth: 1.5,
-          borderColor: data.leadDuplicado ? "#CC0000" : "#CCC",
-          backgroundColor: data.leadDuplicado ? "#CC0000" : "#fff",
-          alignItems: "center", justifyContent: "center",
-        }}>
-          {data.leadDuplicado && <Ionicons name="checkmark" size={12} color="#fff" />}
-        </View>
-        <Text style={{ fontSize: 14, color: "#555" }}>Lead Duplicado</Text>
-      </TouchableOpacity>
-
       <NotasEvento value={data.notasEvento} onChangeText={(v) => setData({ notasEvento: v })} />
-    </View>
-  </ScrollView>
-);
-
-// ─── Aba: Contatos ────────────────────────────────────────────────────────────
-
-const TabContatos: React.FC<{ data: LeadData; setData: (d: Partial<LeadData>) => void }> = ({ data, setData }) => (
-  <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
-    <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
-      <InputField
-        placeholder="Telefone"
-        value={data.telefone}
-        onChangeText={(v) => setData({ telefone: v })}
-        keyboardType="phone-pad"
-        autoCapitalize="none"
-      />
-      <InputField
-        placeholder="E-mail do Contato"
-        value={data.email}
-        onChangeText={(v) => setData({ email: v })}
-        keyboardType="email-address"
-        autoCapitalize="none"
-      />
-    </View>
-    <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
-      <NotasEvento value={data.notasEvento} onChangeText={(v) => setData({ notasEvento: v })} />
-    </View>
-  </ScrollView>
-);
-
-// ─── Aba: Atividades ──────────────────────────────────────────────────────────
-
-const TabAtividades: React.FC<{ data: LeadData; setData: (d: Partial<LeadData>) => void }> = ({ data, setData }) => (
-  <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
-    <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-        <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: "#FFF0F0", alignItems: "center", justifyContent: "center" }}>
-          <MaterialCommunityIcons name="chart-line-variant" size={16} color="#CC0000" />
-        </View>
-        <View>
-          <Text style={{ fontSize: 14, fontWeight: "700", color: "#111" }}>
-            Lead criado no evento EBACE 2026
-          </Text>
-          <Text style={{ fontSize: 12, color: "#999", marginTop: 2 }}>
-            Hoje · {new Date().getHours()}:{String(new Date().getMinutes()).padStart(2, "0")}
-          </Text>
-        </View>
-      </View>
-    </View>
-    <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
-      <NotasEvento value={data.notasEvento} onChangeText={(v) => setData({ notasEvento: v })} />
-    </View>
-  </ScrollView>
-);
-
-// ─── Aba: Executivos ──────────────────────────────────────────────────────────
-
-const TabExecutivos: React.FC<{ data: LeadData; setData: (d: Partial<LeadData>) => void }> = ({ data, setData }) => (
-  <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
-    <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
-      <Text style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>Executivo Secundário</Text>
-      <View style={{ backgroundColor: "#F4F4F6", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14 }}>
-        <TextInput
-          placeholder="Buscar executivo..."
-          placeholderTextColor="#BBBBBB"
-          value={data.executivoSecundario}
-          onChangeText={(v) => setData({ executivoSecundario: v })}
-          style={{ fontSize: 15, color: "#111", padding: 0 }}
-        />
-      </View>
     </View>
   </ScrollView>
 );
 
 // ─── Tela Principal ───────────────────────────────────────────────────────────
 
-const TABS: { key: Tab; label: string }[] = [
-  { key: "diversos", label: "Diversos" },
-  { key: "contatos", label: "Contatos" },
-  { key: "atividades", label: "Atividades" },
-  { key: "executivos", label: "Execut." },
-];
-
 export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "novo" }: Props) {
-  const [activeTab, setActiveTab] = useState<Tab>("diversos");
   const isEditing = mode === "editar";
   const [saving, setSaving] = useState(false);
   const [data, setDataState] = useState<LeadData>({
@@ -440,6 +409,11 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
   const handleSave = async (sincronizar: boolean) => {
     if (!data.nomeEmpresa?.trim()) {
       Alert.alert("Campo obrigatório", "Informe o Nome da Empresa antes de salvar.");
+      return;
+    }
+
+    if (!isEmailValido(data.email)) {
+      Alert.alert("E-mail inválido", "Informe um e-mail válido (ex.: nome@dominio.com) ou deixe o campo em branco.");
       return;
     }
 
@@ -571,23 +545,6 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
     }
   };
 
-  const renderTab = () => {
-    switch (activeTab) {
-      case "diversos":
-        return (
-          <TabDiversos
-            data={data}
-            setData={setData}
-            executivo={executivo}
-            carregandoExecutivo={carregandoExecutivo}
-          />
-        );
-      case "contatos":    return <TabContatos data={data} setData={setData} />;
-      case "atividades":  return <TabAtividades data={data} setData={setData} />;
-      case "executivos":  return <TabExecutivos data={data} setData={setData} />;
-    }
-  };
-
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#F4F4F6" }}>
       <StatusBar barStyle="dark-content" backgroundColor="#F4F4F6" />
@@ -618,33 +575,14 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
         </View>
       </View>
 
-      {/* ── Tab Bar ─────────────────────────────────────────────────────── */}
-      <View style={{ flexDirection: "row", paddingHorizontal: 16, gap: 8, marginBottom: 4 }}>
-        {TABS.map((tab) => {
-          const active = activeTab === tab.key;
-          return (
-            <TouchableOpacity
-              key={tab.key}
-              onPress={() => setActiveTab(tab.key)}
-              style={{
-                paddingHorizontal: 14, paddingVertical: 8, borderRadius: 24,
-                backgroundColor: active ? "#CC0000" : "#fff",
-                borderWidth: active ? 0 : 1,
-                borderColor: "#E0E0E0",
-              }}
-              activeOpacity={0.8}
-            >
-              <Text style={{ fontSize: 13, fontWeight: "600", color: active ? "#fff" : "#666" }}>
-                {tab.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-
-      {/* ── Conteúdo da Aba ─────────────────────────────────────────────── */}
+      {/* ── Conteúdo ────────────────────────────────────────────────────── */}
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-        {renderTab()}
+        <LeadFormContent
+          data={data}
+          setData={setData}
+          executivo={executivo}
+          carregandoExecutivo={carregandoExecutivo}
+        />
       </KeyboardAvoidingView>
 
       {/* ── Footer: Cancelar + Salvar + Salvar e Sincronizar ──────────────── */}

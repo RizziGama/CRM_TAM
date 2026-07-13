@@ -165,16 +165,17 @@ const LeadCard: React.FC<{
 
 // ─── Tela Principal ───────────────────────────────────────────────────────────
 
-// Só faz sentido filtrar entre "Pendente" e "Erro" aqui: leads já
-// sincronizados com o IFS não aparecem mais nesta tela (ver
-// `leadsNaoSincronizados` abaixo), então não há motivo pra ter um filtro
-// "Sync" que nunca mostraria nada.
-type Filtro = "todos" | "pendente" | "erro";
+// Agora a tela mostra leads de todos os status — inclusive os já
+// sincronizados com o IFS — então o filtro ganha a opção "Sincronizado".
+// Leads "sync" continuam visíveis mas não podem mais ser editados (ver
+// `handleLeadPress` abaixo).
+type Filtro = "todos" | "pendente" | "erro" | "sync";
 
 const FILTROS: { key: Filtro; label: string }[] = [
   { key: "todos", label: "Todos" },
   { key: "pendente", label: "Pendente" },
   { key: "erro", label: "Erro" },
+  { key: "sync", label: "Sincronizado" },
 ];
 
 export default function LeadsScreen() {
@@ -200,14 +201,10 @@ export default function LeadsScreen() {
     carregarLeads();
   }, [carregarLeads]);
 
-  // Nesta tela só devem aparecer leads que AINDA NÃO foram sincronizados
-  // com o IFS ("pendente" ou "erro"). Leads com status "sync" já estão
-  // consolidados no IFS e não podem mais ser editados pelo app — por isso
-  // somem da listagem (e, consequentemente, não há como abrir a edição
-  // deles a partir daqui).
-  const leadsNaoSincronizados = leads.filter((l) => l.status !== "sync");
-
-  const leadsCard = leadsNaoSincronizados.map(paraCard);
+  // A tela agora mostra leads de TODOS os status, inclusive os já
+  // sincronizados com o IFS — só a edição continua bloqueada para esses
+  // (ver `handleLeadPress`).
+  const leadsCard = leads.map(paraCard);
 
   const leadsFiltrados = leadsCard.filter((lead) => {
     const matchFiltro = filtro === "todos" || lead.status === filtro;
@@ -311,7 +308,7 @@ export default function LeadsScreen() {
       <View style={{ paddingHorizontal: 20, paddingTop: 14, paddingBottom: 10 }}>
         <Text style={{ fontSize: 24, fontWeight: "800", color: "#111" }}>Pipeline de Leads</Text>
         <Text style={{ fontSize: 13, color: "#888", marginTop: 2 }}>
-          {leadsCard.length} leads aguardando sincronização
+          {leadsCard.length} leads cadastrados
         </Text>
       </View>
 
@@ -376,6 +373,7 @@ export default function LeadsScreen() {
         </View>
       ) : (
         <ScrollView
+          style={{ flex: 1 }}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 100 }}
         >
@@ -383,7 +381,7 @@ export default function LeadsScreen() {
             <View style={{ alignItems: "center", paddingTop: 60 }}>
               <Ionicons name="search-outline" size={48} color="#DDD" />
               <Text style={{ color: "#BBB", marginTop: 12, fontSize: 15 }}>
-                {leadsCard.length === 0 ? "Nenhum lead pendente ou com erro" : "Nenhum lead encontrado"}
+                {leadsCard.length === 0 ? "Nenhum lead cadastrado ainda" : "Nenhum lead encontrado"}
               </Text>
             </View>
           ) : (
@@ -393,7 +391,22 @@ export default function LeadsScreen() {
                 lead={lead}
                 sincronizando={sincronizandoId === lead.id}
                 onPress={() => {
-                  const original = leadsNaoSincronizados.find((l) => l.id === lead.id) ?? null;
+                  const original = leads.find((l) => l.id === lead.id) ?? null;
+                  if (!original) return;
+
+                  // Leads já sincronizados com o IFS não podem mais ser
+                  // editados — mesmo padrão usado em Dashboard/Agenda: o
+                  // card continua visível (dá visibilidade do que já foi
+                  // feito), só a abertura do formulário de edição é
+                  // bloqueada.
+                  if (original.status === "sync") {
+                    Alert.alert(
+                      "Lead sincronizado",
+                      "Este lead já foi sincronizado com o IFS e não pode ser editado."
+                    );
+                    return;
+                  }
+
                   setSelectedLead(original);
                 }}
                 onRetry={() => handleRetry(lead.id)}

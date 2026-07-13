@@ -14,6 +14,7 @@ import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
 import NovoLeadScreen from "./NovoLeadScreen";
 import { AzureUserInfo, getUserInfo } from "@/components/azureAuth";
 import { LeadLocal, listarLeadsLocais } from "./leadsStore";
+import { EventoLead, buscarEventosIFS, getEventoSelecionadoCache } from "./ifsService";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -44,21 +45,31 @@ interface EventData {
 interface DashboardProps {
   onLeadPress?: (lead: LeadLocal) => void;
   onVerTodos?: () => void;
+  onAbrirEvento?: () => void;
   userInfo?: AzureUserInfo | null;
 }
 
-// ─── Dados Mock do Evento (isso continua fixo — não é um "lead") ──────────────
+// ─── Dados de fallback do Evento ───────────────────────────────────────────────
+//
+// Usados só enquanto nenhum evento foi carregado/selecionado ainda (ex.: sem
+// rede na primeira abertura, ou antes de o usuário escolher um evento na
+// Agenda). Assim que houver um evento selecionado (mesmo cache local vindo
+// de AgendaScreen), o nome e a meta reais (Cf_Nome_Evento / Cf_Meta_Leasds)
+// passam a valer aqui também — Dashboard e Agenda sempre mostram o mesmo
+// evento "ativo".
+
+const META_FALLBACK = 15;
 
 const EVENT: EventData = {
-  name: "EBACE 2026",
-  location: "Palexpo — Genebra",
+  name: "Selecionar evento",
+  location: "",
   leadsHoje: 3,
   deltaLeads: 3,
-  meta: 15,
+  meta: META_FALLBACK,
   restantes: 9,
   progresso: 40,
   leadsFeitos: 6,
-  encerramento: "25/06/2026",
+  encerramento: "—",
 };
 
 // ─── Helpers de exibição (mesma lógica usada em LeadsScreen) ──────────────────
@@ -141,13 +152,15 @@ const LeadCard: React.FC<{ lead: Lead; onPress?: () => void }> = ({ lead, onPres
 
 // ─── Tela Principal ───────────────────────────────────────────────────────────
 
-const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, userInfo: userInfoProp }) => {
+const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, onAbrirEvento, userInfo: userInfoProp }) => {
   const [search, setSearch] = useState("");
   const [novoLeadVisible, setNovoLeadVisible] = useState(false);
   const [userInfoState, setUserInfoState] = useState<AzureUserInfo | null>(null);
   const [leadsRecentes, setLeadsRecentes] = useState<LeadLocal[]>([]);
+  const [todosLeads, setTodosLeads] = useState<LeadLocal[]>([]);
   const [totalLeads, setTotalLeads] = useState(0);
   const [leadsHoje, setLeadsHoje] = useState(0);
+  const [eventoAtual, setEventoAtual] = useState<EventoLead | null>(null);
 
   // Se o componente pai passar userInfo explicitamente, usamos ele (override).
   // Caso contrário, buscamos o usuário logado direto do SecureStore/token.
@@ -175,24 +188,73 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, us
   const displayName = userInfo?.name ?? "Usuário";
 
   // Carrega os leads reais (leadsStore). A lista completa é usada pros
-  // contadores (total e "hoje"); só os 3 mais recentes são exibidos como
+  // contadores (total e "hoje"); só os 5 mais recentes são exibidos como
   // cards. Antes, "leadsHoje" era calculado em cima da lista já cortada em
-  // 3 itens (leadsRecentes), então o contador nunca conseguia passar de 3
-  // — esse era o número travado. Agora ele conta em cima de `todos`.
+  // poucos itens (leadsRecentes), então o contador nunca conseguia passar
+  // desse número — esse era o bug. Agora ele conta em cima de `todos`.
   const carregarLeadsRecentes = useCallback(async () => {
     const todos = await listarLeadsLocais(); // já vem ordenado, mais recentes primeiro
     const hojeStr = new Date().toLocaleDateString("pt-BR");
 
     setTotalLeads(todos.length);
     setLeadsHoje(todos.filter((l) => l.dataCriacao === hojeStr).length);
-    setLeadsRecentes(todos.slice(0, 3));
+    setLeadsRecentes(todos.slice(0, 5));
+    setTodosLeads(todos);
   }, []);
 
   useEffect(() => {
     carregarLeadsRecentes();
   }, [carregarLeadsRecentes]);
 
-  const leadsCard = leadsRecentes.map(paraCardResumido);
+  // Carrega o evento que está "ativo" na Agenda (cache local salvo por
+  // AgendaScreen ao selecionar um evento). Também busca a lista atualizada
+  // no IFS em paralelo, pra garantir que a meta exibida aqui reflita
+  // qualquer alteração feita no IFS desde a última seleção — igual à
+  // lógica usada em AgendaScreen.carregarEventos.
+  const carregarEventoAtual = useCallback(async () => {
+    try {
+      const [cache, lista] = await Promise.all([
+        getEventoSelecionadoCache(),
+        buscarEventosIFS(),
+      ]);
+
+      if (cache) {
+        const atualizado = lista.find((e) => e.objkey === cache.objkey);
+        setEventoAtual(atualizado ?? cache);
+      } else if (lista.length > 0) {
+        setEventoAtual(lista[0]);
+      }
+    } catch (err) {
+      console.warn("[DashboardScreen] Falha ao carregar evento selecionado:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    carregarEventoAtual();
+  }, [carregarEventoAtual]);
+
+  // Sem busca: mostra só os 3 leads mais recentes (comportamento original).
+  // Com busca: filtra em TODOS os leads (empresa ou contato) e mostra os
+  // resultados encontrados, não só os 3 últimos.
+  const buscaAtiva = search.trim().length > 0;
+
+  const leadsFonte = buscaAtiva
+    ? todosLeads.filter((l) => {
+        const termo = search.trim().toLowerCase();
+        return (
+          (l.nomeEmpresa ?? "").toLowerCase().includes(termo) ||
+          (l.nomeContato ?? "").toLowerCase().includes(termo)
+        );
+      })
+    : leadsRecentes;
+
+  const leadsCard = leadsFonte.map(paraCardResumido);
+
+  // Nome e meta seguem o evento selecionado na Agenda; cai no fallback
+  // enquanto nada foi carregado/selecionado ainda.
+  const eventName = eventoAtual?.nome ?? EVENT.name;
+  const eventMeta =
+    eventoAtual?.metaLeads && eventoAtual.metaLeads > 0 ? eventoAtual.metaLeads : META_FALLBACK;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#F4F4F6" }}>
@@ -234,22 +296,21 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, us
         </TouchableOpacity>
       </View>
 
-      {/* Search */}
-      <View style={{ paddingHorizontal: 20, marginTop: 8, marginBottom: 12 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: "#fff", borderRadius: 24, paddingHorizontal: 14, paddingVertical: 10, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
-          <Feather name="search" size={16} color="#AAA" style={{ marginRight: 8 }} />
-          <TextInput value={search} onChangeText={setSearch} placeholder="Buscar leads, empresas..." placeholderTextColor="#BBB" style={{ flex: 1, fontSize: 14, color: "#333" }} />
-        </View>
-      </View>
-
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 32 }}>
-        {/* Banner Evento */}
-        <TouchableOpacity activeOpacity={0.8} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: "#FFF0F0", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, marginBottom: 16, borderLeftWidth: 4, borderLeftColor: "#CC0000" }}>
+        {/* Banner Evento — leva direto pra aba Agenda, onde dá pra trocar
+            ou editar o evento ativo. */}
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={onAbrirEvento}
+          style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: "#FFF0F0", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, marginBottom: 16, borderLeftWidth: 4, borderLeftColor: "#CC0000" }}
+        >
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
             <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: "#CC0000" }} />
             <View>
-              <Text style={{ fontWeight: "700", fontSize: 14, color: "#CC0000" }}>{EVENT.name}</Text>
-              <Text style={{ fontSize: 12, color: "#888", marginTop: 1 }}>{EVENT.location}</Text>
+              <Text style={{ fontWeight: "700", fontSize: 14, color: "#CC0000" }}>{eventName}</Text>
+              {EVENT.location ? (
+                <Text style={{ fontSize: 12, color: "#888", marginTop: 1 }}>{EVENT.location}</Text>
+              ) : null}
             </View>
           </View>
           <Ionicons name="chevron-forward" size={18} color="#CC0000" />
@@ -268,39 +329,55 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, us
               <MaterialCommunityIcons name="target" size={18} color="#fff" />
             </View>
             <Text style={{ fontSize: 11, fontWeight: "600", color: "rgba(255,255,255,0.8)", letterSpacing: 0.8 }}>META DO EVENTO</Text>
-            <Text style={{ fontSize: 36, fontWeight: "800", color: "#fff", marginTop: 4 }}>{EVENT.meta}</Text>
-            <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.8)", marginTop: 2 }}>{Math.max(EVENT.meta - totalLeads, 0)} restantes</Text>
+            <Text style={{ fontSize: 36, fontWeight: "800", color: "#fff", marginTop: 4 }}>{eventMeta}</Text>
+            <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.8)", marginTop: 2 }}>{Math.max(eventMeta - totalLeads, 0)} restantes</Text>
           </View>
         </View>
 
         {/* Progresso */}
         <View style={{ backgroundColor: "#fff", borderRadius: 14, padding: 16, marginBottom: 24, shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 4, elevation: 1 }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 10 }}>
-            <Text style={{ fontWeight: "700", fontSize: 14, color: "#111" }}>Progresso — {EVENT.name}</Text>
+            <Text style={{ fontWeight: "700", fontSize: 14, color: "#111" }}>Progresso — {eventName}</Text>
             <Text style={{ fontWeight: "700", fontSize: 14, color: "#CC0000" }}>
-              {Math.min(Math.round((totalLeads / EVENT.meta) * 100), 100)}%
+              {Math.min(Math.round((totalLeads / eventMeta) * 100), 100)}%
             </Text>
           </View>
           <View style={{ height: 6, backgroundColor: "#F0F0F0", borderRadius: 3, overflow: "hidden", marginBottom: 10 }}>
-            <View style={{ height: "100%", width: `${Math.min((totalLeads / EVENT.meta) * 100, 100)}%`, backgroundColor: "#CC0000", borderRadius: 3 }} />
+            <View style={{ height: "100%", width: `${Math.min((totalLeads / eventMeta) * 100, 100)}%`, backgroundColor: "#CC0000", borderRadius: 3 }} />
           </View>
           <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-            <Text style={{ fontSize: 12, color: "#999" }}>{totalLeads} de {EVENT.meta} leads</Text>
+            <Text style={{ fontSize: 12, color: "#999" }}>{totalLeads} de {eventMeta} leads</Text>
             <Text style={{ fontSize: 12, color: "#999" }}>Encerra: {EVENT.encerramento}</Text>
           </View>
         </View>
 
-        {/* Leads Recentes */}
+        {/* Search — logo acima de Leads Recentes, já que é ela quem filtra
+            essa lista */}
+        <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: "#fff", borderRadius: 24, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 12, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
+          <Feather name="search" size={16} color="#AAA" style={{ marginRight: 8 }} />
+          <TextInput value={search} onChangeText={setSearch} placeholder="Buscar leads, empresas..." placeholderTextColor="#BBB" style={{ flex: 1, fontSize: 14, color: "#333" }} />
+          {search !== "" && (
+            <TouchableOpacity onPress={() => setSearch("")}>
+              <Ionicons name="close-circle" size={18} color="#CCC" />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Leads Recentes / Resultados da busca */}
         <View style={{ marginBottom: 16 }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <Text style={{ fontWeight: "700", fontSize: 16, color: "#111" }}>Leads Recentes</Text>
-            <TouchableOpacity onPress={onVerTodos}>
-              <Text style={{ fontSize: 13, color: "#CC0000", fontWeight: "600" }}>Ver todos</Text>
-            </TouchableOpacity>
+            <Text style={{ fontWeight: "700", fontSize: 16, color: "#111" }}>
+              {buscaAtiva ? "Resultados da busca" : "Leads Recentes"}
+            </Text>
+            {!buscaAtiva && (
+              <TouchableOpacity onPress={onVerTodos}>
+                <Text style={{ fontSize: 13, color: "#CC0000", fontWeight: "600" }}>Ver todos</Text>
+              </TouchableOpacity>
+            )}
           </View>
           {leadsCard.length === 0 ? (
             <Text style={{ fontSize: 13, color: "#BBB", textAlign: "center", paddingVertical: 24 }}>
-              Nenhum lead cadastrado ainda
+              {buscaAtiva ? "Nenhum lead encontrado" : "Nenhum lead cadastrado ainda"}
             </Text>
           ) : (
             leadsCard.map((lead) => (
@@ -308,7 +385,7 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, us
                 key={lead.id}
                 lead={lead}
                 onPress={() => {
-                  const original = leadsRecentes.find((l) => l.id === lead.id);
+                  const original = todosLeads.find((l) => l.id === lead.id);
                   if (!original) return;
 
                   // Leads já sincronizados com o IFS não podem mais ser

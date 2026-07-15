@@ -228,6 +228,63 @@ export async function getEventoSelecionadoCache(): Promise<EventoLead | null> {
   }
 }
 
+
+export interface PaisIFS {
+  codigo: string;
+  nome: string;
+}
+
+// Reference_IsoCountry mora dentro do próprio BusinessLeadHandling.svc
+// (mesmo serviço usado pra criar o lead) — não existe um "CountryHandling.svc"
+// separado no IFS. É esse o endpoint correto:
+// https://tamifssup.avcweb.com.br:443/int/ifsapplications/projection/v1/BusinessLeadHandling.svc/Reference_IsoCountry
+
+export async function buscarPaisesIFS(): Promise<PaisIFS[]> {
+  try {
+    const response = await fetch(
+      `${IFS_BASE_URL}/Reference_IsoCountry?$select=CountryCode,Description`,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: basicAuth,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      console.warn(`[IFS] Erro ao buscar países: ${response.status}`);
+      return [];
+    }
+
+    const json = await response.json();
+
+    return (json?.value ?? [])
+      .map((item: any) => ({
+        codigo: item.CountryCode,
+        nome: item.Description,
+      }))
+      .sort((a: PaisIFS, b: PaisIFS) =>
+        a.nome.localeCompare(b.nome, "pt-BR")
+      );
+  } catch (err) {
+    console.error("[IFS] Erro ao buscar países:", err);
+    return [];
+  }
+}
+
+export async function obterCodigoPais(nomePais: string): Promise<string> {
+  const paises = await buscarPaisesIFS();
+
+  const encontrado = paises.find(
+    (p) =>
+      p.nome.trim().toUpperCase() ===
+      nomePais.trim().toUpperCase()
+  );
+
+  return encontrado?.codigo ?? "BR";
+}
+
 // ─── Criar Lead ───────────────────────────────────────────────────────────────
 
 export async function criarLeadIFS(formData: {
@@ -235,6 +292,10 @@ export async function criarLeadIFS(formData: {
   nomeContato?: string;
   cnpj?: string;
   idioma?: string;
+  pais?: string;
+  paisCodigo?: string; // código do país (ex.: "BR") já resolvido na tela, vindo
+                       // da seleção do usuário no modal — evita ter que
+                       // rebuscar a lista de países e reconciliar pelo nome.
   dataCriacao?: string;
   mainRepresentativeId?: string; // ID real do executivo logado (vem do IFS)
   [key: string]: any;
@@ -250,11 +311,18 @@ export async function criarLeadIFS(formData: {
     );
   }
 
+  // Se a tela já mandou o código do país (fluxo normal, vindo da seleção no
+  // modal), usa ele direto. Só cai no lookup por nome (obterCodigoPais) como
+  // fallback de compatibilidade, caso algum chamador antigo não informe.
+  const codigoPais =
+    formData.paisCodigo?.trim() ||
+    (await obterCodigoPais(formData.pais ?? "Brasil"));
+
   const payload = {
     Name: formData.nomeEmpresa.trim(),
     AssociationNo: null,
     DefaultLanguage: mapIdioma(formData.idioma ?? "Português"),
-    Country: "BR",
+    Country: codigoPais,
     CorporateForm: null,
     Turnover: null,
     TurnoverCurrency: "BRL",
@@ -275,7 +343,7 @@ export async function criarLeadIFS(formData: {
     ...(formData.nomeContato?.trim() && {
       MainContactName: formData.nomeContato.trim(),
     }),
-    CountryCode: "BR",
+    CountryCode: codigoPais,
     SourceRef: "BUSINESS_LEAD",
     CorporateFormDesc: null,
     OldLeadId: null,
@@ -375,4 +443,5 @@ export async function criarLeadIFS(formData: {
       rawError: `${err?.name}: ${msg}`,
     };
   }
+  
 }

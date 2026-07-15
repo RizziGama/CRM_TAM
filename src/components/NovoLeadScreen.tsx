@@ -11,9 +11,11 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  Modal,
+  Pressable,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
-import { criarLeadIFS, getExecutivoCache, ExecutivoInfo } from "./ifsService";
+import { criarLeadIFS, getExecutivoCache, ExecutivoInfo, PaisIFS, buscarPaisesIFS } from "./ifsService";
 import { LeadLocal, novoIdLocal, upsertLeadLocal } from "./leadsStore";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -33,6 +35,8 @@ interface LeadData {
   nomeContato: string;
   idioma: string;
   pais: string;
+  paisCodigo: string; // código IFS do país (ex.: "BR"), vem junto com a seleção
+                       // no modal — é isso que vai no payload, não o nome.
   origem: string;
   mercado: string;
   segmento: string;
@@ -218,7 +222,8 @@ const LeadFormContent: React.FC<{
   setData: (d: Partial<LeadData>) => void;
   executivo: ExecutivoInfo | null;
   carregandoExecutivo: boolean;
-}> = ({ data, setData, executivo, carregandoExecutivo }) => (
+  onPressPais: () => void;
+}> = ({ data, setData, executivo, carregandoExecutivo, onPressPais}) => (
   <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
     {/* Card principal */}
     <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
@@ -269,14 +274,46 @@ const LeadFormContent: React.FC<{
             <Ionicons name="chevron-down" size={14} color="#999" />
           </View>
         </View>
-        <View style={{ flex: 1, backgroundColor: "#F4F4F6", borderRadius: 12, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12 }}>
-          <FieldLabel label="País" />
-          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-            <Text style={{ fontSize: 14, color: "#111", fontWeight: "700", flex: 1 }}>{data.pais}</Text>
-            <Ionicons name="chevron-down" size={14} color="#999" />
-          </View>
-        </View>
       </View>
+        <TouchableOpacity
+        
+          onPress={onPressPais}
+          style={{
+            flex: 1,
+            backgroundColor: "#F4F4F6",
+            borderRadius: 12,
+            paddingHorizontal: 14,
+            paddingTop: 10,
+            paddingBottom: 12,
+          }}
+        >
+          <FieldLabel label="País" />
+
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 14,
+                color: "#111",
+                fontWeight: "700",
+                flex: 1,
+              }}
+            >
+              {data.pais}
+            </Text>
+
+            <Ionicons
+              name="chevron-down"
+              size={14}
+              color="#999"
+            />
+          </View>
+        </TouchableOpacity>
 
       <SelectField label="Origem" value={data.origem} />
     </View>
@@ -333,6 +370,80 @@ const LeadFormContent: React.FC<{
   </ScrollView>
 );
 
+// ─── Modal: Seletor de País ───────────────────────────────────────────────────
+//
+// Mesmo padrão do seletor de eventos do AgendaScreen: modal transparente,
+// com fundo escurecido, mostrando um cartão flutuante por cima da tela atual
+// (não é uma tela cheia nova) e lista rolável dos países vindos do IFS
+// (Reference_IsoCountry). Ao tocar num país, guarda nome + código e fecha.
+
+const SeletorPaisModal: React.FC<{
+  visible: boolean;
+  onClose: () => void;
+  paises: PaisIFS[];
+  paisAtual: string;
+  carregando: boolean;
+  onSelecionar: (pais: PaisIFS) => void;
+}> = ({ visible, onClose, paises, paisAtual, carregando, onSelecionar }) => (
+  <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Pressable
+      style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", paddingHorizontal: 20 }}
+      onPress={onClose}
+    >
+      <Pressable
+        onPress={(e) => e.stopPropagation()}
+        style={{ backgroundColor: "#fff", borderRadius: 20, maxHeight: "70%", overflow: "hidden" }}
+      >
+        <View style={{ paddingHorizontal: 20, paddingTop: 18, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: "#F0F0F0" }}>
+          <Text style={{ fontSize: 16, fontWeight: "800", color: "#111" }}>Selecione um país</Text>
+          <Text style={{ fontSize: 12, color: "#999", marginTop: 2 }}>Países cadastrados no IFS</Text>
+        </View>
+
+        {carregando ? (
+          <View style={{ paddingVertical: 40, alignItems: "center" }}>
+            <ActivityIndicator size="large" color="#CC0000" />
+          </View>
+        ) : paises.length === 0 ? (
+          <View style={{ paddingVertical: 40, alignItems: "center", paddingHorizontal: 20 }}>
+            <Ionicons name="earth-outline" size={40} color="#DDD" />
+            <Text style={{ color: "#BBB", marginTop: 10, fontSize: 13, textAlign: "center" }}>
+              Nenhum país encontrado no IFS
+            </Text>
+          </View>
+        ) : (
+          <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+            {paises.map((item) => {
+              const ativo = item.nome.trim().toUpperCase() === paisAtual.trim().toUpperCase();
+              return (
+                <TouchableOpacity
+                  key={item.codigo}
+                  onPress={() => onSelecionar(item)}
+                  activeOpacity={0.7}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    paddingHorizontal: 20,
+                    paddingVertical: 14,
+                    borderBottomWidth: 1,
+                    borderBottomColor: "#F5F5F5",
+                    backgroundColor: ativo ? "#FFF5F5" : "#fff",
+                  }}
+                >
+                  <Text style={{ fontSize: 14.5, fontWeight: "700", color: "#111" }} numberOfLines={1}>
+                    {item.nome}
+                  </Text>
+                  {ativo && <Ionicons name="checkmark-circle" size={20} color="#CC0000" />}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
+      </Pressable>
+    </Pressable>
+  </Modal>
+);
+
 // ─── Tela Principal ───────────────────────────────────────────────────────────
 
 export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "novo" }: Props) {
@@ -344,6 +455,7 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
     nomeContato: "",
     idioma: "Português (Brasil)",
     pais: "BRASIL",
+    paisCodigo: "BR",
     origem: "Indicação",
     mercado: "FINANCE - Financeiro",
     segmento: "Financeiro",
@@ -377,6 +489,12 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+
+  
+  const [paises, setPaises] = useState<PaisIFS[]>([]);
+  const [modalPaises, setModalPaises] = useState(false);
+  const [loadingPaises, setLoadingPaises] = useState(false);
+
   // Executivo de Vendas real (logado e já validado contra o IFS no login).
   // Vem do cache local — não precisa consultar o IFS de novo aqui.
   const [executivo, setExecutivo] = useState<ExecutivoInfo | null>(null);
@@ -399,6 +517,26 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
     };
   }, []);
 
+  const abrirModalPaises = async () => {
+  try {
+    setLoadingPaises(true);
+
+    // evita consultar o IFS toda vez que abrir
+    if (paises.length === 0) {
+      const lista = await buscarPaisesIFS();
+      setPaises(lista);
+    }
+
+    setModalPaises(true);
+  } catch (err) {
+    Alert.alert(
+      "Erro",
+      "Não foi possível carregar a lista de países."
+    );
+  } finally {
+    setLoadingPaises(false);
+  }
+};
   const setData = (partial: Partial<LeadData>) =>
     setDataState((prev) => ({ ...prev, ...partial }));
 
@@ -484,6 +622,7 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
         cnpj:          data.cnpj,
         idioma:        data.idioma,
         pais:          data.pais,
+        paisCodigo:    data.paisCodigo,
         origem:        data.origem,
         mercado:       data.mercado,
         segmento:      data.segmento,
@@ -582,6 +721,7 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
           setData={setData}
           executivo={executivo}
           carregandoExecutivo={carregandoExecutivo}
+          onPressPais={abrirModalPaises}
         />
       </KeyboardAvoidingView>
 
@@ -641,6 +781,17 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
           )}
         </TouchableOpacity>
       </View>
+      <SeletorPaisModal
+        visible={modalPaises}
+        onClose={() => setModalPaises(false)}
+        paises={paises}
+        paisAtual={data.pais}
+        carregando={loadingPaises}
+        onSelecionar={(item) => {
+          setData({ pais: item.nome, paisCodigo: item.codigo });
+          setModalPaises(false);
+        }}
+      />
     </SafeAreaView>
   );
 }

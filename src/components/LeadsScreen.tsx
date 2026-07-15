@@ -236,7 +236,10 @@ export default function LeadsScreen() {
         idioma: lead.idioma,
         pais: lead.pais,
         origem: lead.origem,
-        mercado: lead.mercado,
+        // FIX: antes ia `mercado: lead.mercado` (a descrição, ex. "Financeiro"),
+        // mas o ifsService só lê `mercadoCode` para montar o MarketCode do
+        // payload — então o retry nunca reenviava o mercado de fato.
+        mercadoCode: lead.mercadoCode,
         segmento: lead.segmento,
         potencial: lead.potencial,
         dataCriacao: lead.dataCriacao,

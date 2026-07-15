@@ -234,6 +234,16 @@ export interface PaisIFS {
   nome: string;
 }
 
+export interface IdiomaIFS {
+  codigo: string;
+  nome: string;
+}
+
+export interface OrigemIFS {
+  codigo: string;   // SourceId puro do IFS (ex.: "20", "LB26")
+  nome: string;     // Description
+}
+
 // Reference_IsoCountry mora dentro do próprio BusinessLeadHandling.svc
 // (mesmo serviço usado pra criar o lead) — não existe um "CountryHandling.svc"
 // separado no IFS. É esse o endpoint correto:
@@ -285,6 +295,85 @@ export async function obterCodigoPais(nomePais: string): Promise<string> {
   return encontrado?.codigo ?? "BR";
 }
 
+export async function buscarIdiomasIFS(): Promise<IdiomaIFS[]> {
+  try {
+    const response = await fetch(
+      `${IFS_BASE_URL}/Reference_Languages?$select=LanguageCode,Description`,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: basicAuth,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      console.warn(`[IFS] Erro ao buscar idiomas: ${response.status}`);
+      return [];
+    }
+
+    const json = await response.json();
+
+    return (json?.value ?? [])
+      .map((item: any) => ({
+        codigo: item.LanguageCode,
+        nome: item.Description,
+      }))
+      .sort((a: IdiomaIFS, b: IdiomaIFS) =>
+        a.nome.localeCompare(b.nome, "pt-BR")
+      );
+  } catch (err) {
+    console.error("[IFS] Erro ao buscar idiomas:", err);
+    return [];
+  }
+}
+
+// ─── Origens (CustomerSource) ────────────────────────────────────────────────
+//
+// Endpoint: CustomerSourcesHandling.svc/CustomerSourceSet
+// A API devolve SourceId "puro" (ex.: "20", "70", "LB26"). O IFS, na criação
+// do lead, espera o valor com prefixo "Id" (ex.: "Id20"). O prefixo é
+// aplicado no momento do envio (criarLeadIFS), não aqui, pra manter o código
+// exibido/selecionado igual ao que veio da API.
+
+const IFS_ORIGENS_URL = `${IFS_HOST}/CustomerSourcesHandling.svc`;
+
+export async function buscarOrigensIFS(): Promise<OrigemIFS[]> {
+  try {
+    const response = await fetch(
+      `${IFS_ORIGENS_URL}/CustomerSourceSet?$select=SourceId,Description,Objstate`,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: basicAuth,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      console.warn(`[IFS] Erro ao buscar origens: ${response.status}`);
+      return [];
+    }
+
+    const json = await response.json();
+
+    return (json?.value ?? [])
+      .map((item: any) => ({
+        codigo: String(item.SourceId ?? "").trim(),
+        nome: String(item.Description ?? "").trim() || String(item.SourceId ?? ""),
+      }))
+      .filter((o: OrigemIFS) => o.codigo)
+      .sort((a: OrigemIFS, b: OrigemIFS) =>
+        a.nome.localeCompare(b.nome, "pt-BR")
+      );
+  } catch (err) {
+    console.error("[IFS] Erro ao buscar origens:", err);
+    return [];
+  }
+}
+
 // ─── Criar Lead ───────────────────────────────────────────────────────────────
 
 export async function criarLeadIFS(formData: {
@@ -292,10 +381,15 @@ export async function criarLeadIFS(formData: {
   nomeContato?: string;
   cnpj?: string;
   idioma?: string;
+  idiomaCodigo?: string; // código do idioma (ex.: "bp") já resolvido na tela, vindo
+                        // da seleção do usuário no modal — evita o mapeamento fixo.
   pais?: string;
   paisCodigo?: string; // código do país (ex.: "BR") já resolvido na tela, vindo
                        // da seleção do usuário no modal — evita ter que
                        // rebuscar a lista de países e reconciliar pelo nome.
+  origemCodigo?: string; // código puro da origem (ex.: "20", "LB26") — o
+                         // prefixo "Id" é aplicado abaixo, pois é isso que o
+                         // IFS espera no campo SourceId (ex.: "Id20").
   dataCriacao?: string;
   mainRepresentativeId?: string; // ID real do executivo logado (vem do IFS)
   [key: string]: any;
@@ -318,16 +412,22 @@ export async function criarLeadIFS(formData: {
     formData.paisCodigo?.trim() ||
     (await obterCodigoPais(formData.pais ?? "Brasil"));
 
+  // Origem: sempre no formato "Id<SOURCE_ID>". Se a tela mandou o código
+  // puro (ex.: "70"), prefixa com "Id"; se veio vazio, usa "Id20"
+  // (Prospecção) como default de compatibilidade.
+  const codigoOrigemPuro = formData.origemCodigo?.trim();
+  const sourceIdIFS = codigoOrigemPuro ? `Id${codigoOrigemPuro}` : "Id20";
+
   const payload = {
     Name: formData.nomeEmpresa.trim(),
     AssociationNo: null,
-    DefaultLanguage: mapIdioma(formData.idioma ?? "Português"),
+    DefaultLanguage: formData.idiomaCodigo?.trim() || mapIdioma(formData.idioma ?? "Português"),
     Country: codigoPais,
     CorporateForm: null,
     Turnover: null,
     TurnoverCurrency: "BRL",
     PotentialId: null,
-    SourceId: "Id20",
+    SourceId: sourceIdIFS,
     StageId: null,
     MainRepresentativeId: formData.mainRepresentativeId ?? "197",
     MarketCode: null,

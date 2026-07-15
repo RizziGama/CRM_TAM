@@ -15,7 +15,7 @@ import {
   Pressable,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
-import { criarLeadIFS, getExecutivoCache, ExecutivoInfo, PaisIFS, buscarPaisesIFS } from "./ifsService";
+import { criarLeadIFS, getExecutivoCache, ExecutivoInfo, PaisIFS, buscarPaisesIFS, IdiomaIFS, buscarIdiomasIFS, OrigemIFS, buscarOrigensIFS } from "./ifsService";
 import { LeadLocal, novoIdLocal, upsertLeadLocal } from "./leadsStore";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -34,10 +34,14 @@ interface LeadData {
   nomeEmpresa: string;
   nomeContato: string;
   idioma: string;
+  idiomaCodigo: string; // código IFS do idioma (ex.: "bp"), vem junto com a seleção
+                        // no modal — é isso que vai no payload.
   pais: string;
   paisCodigo: string; // código IFS do país (ex.: "BR"), vem junto com a seleção
                        // no modal — é isso que vai no payload, não o nome.
   origem: string;
+  origemCodigo: string; // SourceId puro do IFS (ex.: "20", "LB26") — o
+                        // prefixo "Id" é aplicado no ifsService no envio.
   mercado: string;
   segmento: string;
   potencial: Potencial;
@@ -222,11 +226,14 @@ const LeadFormContent: React.FC<{
   setData: (d: Partial<LeadData>) => void;
   executivo: ExecutivoInfo | null;
   carregandoExecutivo: boolean;
+  onPressIdioma: () => void;
   onPressPais: () => void;
-}> = ({ data, setData, executivo, carregandoExecutivo, onPressPais}) => (
+  onPressOrigem: () => void;
+}> = ({ data, setData, executivo, carregandoExecutivo, onPressIdioma, onPressPais, onPressOrigem }) => (
   <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
     {/* Card principal */}
     <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
+
       {/* CPF/CNPJ com máscara dinâmica (troca sozinha conforme a qtd. de dígitos) */}
       <InputField
         placeholder="CPF / CNPJ"
@@ -267,55 +274,42 @@ const LeadFormContent: React.FC<{
 
       {/* Idioma + País */}
       <View style={{ flexDirection: "row", gap: 10, marginBottom: 10 }}>
-        <View style={{ flex: 1, backgroundColor: "#F4F4F6", borderRadius: 12, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12 }}>
+        <TouchableOpacity
+          onPress={onPressIdioma}
+          activeOpacity={0.7}
+          style={{ flex: 1, backgroundColor: "#F4F4F6", borderRadius: 12, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12 }}
+        >
           <FieldLabel label="Idioma" />
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
             <Text style={{ fontSize: 14, color: "#111", fontWeight: "500", flex: 1 }}>{data.idioma}</Text>
             <Ionicons name="chevron-down" size={14} color="#999" />
           </View>
-        </View>
-      </View>
-        <TouchableOpacity
-        
-          onPress={onPressPais}
-          style={{
-            flex: 1,
-            backgroundColor: "#F4F4F6",
-            borderRadius: 12,
-            paddingHorizontal: 14,
-            paddingTop: 10,
-            paddingBottom: 12,
-          }}
-        >
-          <FieldLabel label="País" />
-
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}
-          >
-            <Text
-              style={{
-                fontSize: 14,
-                color: "#111",
-                fontWeight: "700",
-                flex: 1,
-              }}
-            >
-              {data.pais}
-            </Text>
-
-            <Ionicons
-              name="chevron-down"
-              size={14}
-              color="#999"
-            />
-          </View>
         </TouchableOpacity>
 
-      <SelectField label="Origem" value={data.origem} />
+        <TouchableOpacity
+          onPress={onPressPais}
+          activeOpacity={0.7}
+          style={{ flex: 1, backgroundColor: "#F4F4F6", borderRadius: 12, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12 }}
+        >
+          <FieldLabel label="País" />
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+            <Text style={{ fontSize: 14, color: "#111", fontWeight: "700", flex: 1 }}>{data.pais}</Text>
+            <Ionicons name="chevron-down" size={14} color="#999" />
+          </View>
+        </TouchableOpacity>
+      </View>
+
+      <TouchableOpacity
+        onPress={onPressOrigem}
+        activeOpacity={0.7}
+        style={{ backgroundColor: "#F4F4F6", borderRadius: 12, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 12, marginBottom: 10 }}
+      >
+        <FieldLabel label="Origem" />
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+          <Text style={{ fontSize: 15, color: "#111", fontWeight: "500", flex: 1 }}>{data.origem}</Text>
+          <Ionicons name="chevron-down" size={16} color="#999" />
+        </View>
+      </TouchableOpacity>
     </View>
 
     {/* Card Executivo de Vendas — agora com dados reais do IFS */}
@@ -444,6 +438,146 @@ const SeletorPaisModal: React.FC<{
   </Modal>
 );
 
+// ─── Modal: Seletor de Idioma ─────────────────────────────────────────────────
+
+const SeletorIdiomaModal: React.FC<{
+  visible: boolean;
+  onClose: () => void;
+  idiomas: IdiomaIFS[];
+  idiomaAtual: string;
+  carregando: boolean;
+  onSelecionar: (idioma: IdiomaIFS) => void;
+}> = ({ visible, onClose, idiomas, idiomaAtual, carregando, onSelecionar }) => (
+  <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Pressable
+      style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", paddingHorizontal: 20 }}
+      onPress={onClose}
+    >
+      <Pressable
+        onPress={(e) => e.stopPropagation()}
+        style={{ backgroundColor: "#fff", borderRadius: 20, maxHeight: "70%", overflow: "hidden" }}
+      >
+        <View style={{ paddingHorizontal: 20, paddingTop: 18, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: "#F0F0F0" }}>
+          <Text style={{ fontSize: 16, fontWeight: "800", color: "#111" }}>Selecione um idioma</Text>
+          <Text style={{ fontSize: 12, color: "#999", marginTop: 2 }}>Idiomas cadastrados no IFS</Text>
+        </View>
+
+        {carregando ? (
+          <View style={{ paddingVertical: 40, alignItems: "center" }}>
+            <ActivityIndicator size="large" color="#CC0000" />
+          </View>
+        ) : idiomas.length === 0 ? (
+          <View style={{ paddingVertical: 40, alignItems: "center", paddingHorizontal: 20 }}>
+            <Ionicons name="language-outline" size={40} color="#DDD" />
+            <Text style={{ color: "#BBB", marginTop: 10, fontSize: 13, textAlign: "center" }}>
+              Nenhum idioma encontrado no IFS
+            </Text>
+          </View>
+        ) : (
+          <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+            {idiomas.map((item) => {
+              const ativo = item.nome.trim().toUpperCase() === idiomaAtual.trim().toUpperCase();
+              return (
+                <TouchableOpacity
+                  key={item.codigo}
+                  onPress={() => onSelecionar(item)}
+                  activeOpacity={0.7}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    paddingHorizontal: 20,
+                    paddingVertical: 14,
+                    borderBottomWidth: 1,
+                    borderBottomColor: "#F5F5F5",
+                    backgroundColor: ativo ? "#FFF5F5" : "#fff",
+                  }}
+                >
+                  <Text style={{ fontSize: 14.5, fontWeight: "700", color: "#111" }} numberOfLines={1}>
+                    {item.nome}
+                  </Text>
+                  {ativo && <Ionicons name="checkmark-circle" size={20} color="#CC0000" />}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
+      </Pressable>
+    </Pressable>
+  </Modal>
+);
+
+// ─── Modal: Seletor de Origem ─────────────────────────────────────────────────
+
+const SeletorOrigemModal: React.FC<{
+  visible: boolean;
+  onClose: () => void;
+  origens: OrigemIFS[];
+  origemAtual: string;
+  carregando: boolean;
+  onSelecionar: (origem: OrigemIFS) => void;
+}> = ({ visible, onClose, origens, origemAtual, carregando, onSelecionar }) => (
+  <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Pressable
+      style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", paddingHorizontal: 20 }}
+      onPress={onClose}
+    >
+      <Pressable
+        onPress={(e) => e.stopPropagation()}
+        style={{ backgroundColor: "#fff", borderRadius: 20, maxHeight: "70%", overflow: "hidden" }}
+      >
+        <View style={{ paddingHorizontal: 20, paddingTop: 18, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: "#F0F0F0" }}>
+          <Text style={{ fontSize: 16, fontWeight: "800", color: "#111" }}>Selecione uma origem</Text>
+          <Text style={{ fontSize: 12, color: "#999", marginTop: 2 }}>Origens cadastradas no IFS</Text>
+        </View>
+
+        {carregando ? (
+          <View style={{ paddingVertical: 40, alignItems: "center" }}>
+            <ActivityIndicator size="large" color="#CC0000" />
+          </View>
+        ) : origens.length === 0 ? (
+          <View style={{ paddingVertical: 40, alignItems: "center", paddingHorizontal: 20 }}>
+            <Ionicons name="flag-outline" size={40} color="#DDD" />
+            <Text style={{ color: "#BBB", marginTop: 10, fontSize: 13, textAlign: "center" }}>
+              Nenhuma origem encontrada no IFS
+            </Text>
+          </View>
+        ) : (
+          <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+            {origens.map((item) => {
+              const ativo = item.nome.trim().toUpperCase() === origemAtual.trim().toUpperCase();
+              return (
+                <TouchableOpacity
+                  key={item.codigo}
+                  onPress={() => onSelecionar(item)}
+                  activeOpacity={0.7}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    paddingHorizontal: 20,
+                    paddingVertical: 14,
+                    borderBottomWidth: 1,
+                    borderBottomColor: "#F5F5F5",
+                    backgroundColor: ativo ? "#FFF5F5" : "#fff",
+                  }}
+                >
+                  <Text style={{ fontSize: 14.5, fontWeight: "700", color: "#111" }} numberOfLines={1}>
+                    {item.nome}
+                  </Text>
+                  {ativo && <Ionicons name="checkmark-circle" size={20} color="#CC0000" />}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
+      </Pressable>
+    </Pressable>
+  </Modal>
+);
+
+
+
 // ─── Tela Principal ───────────────────────────────────────────────────────────
 
 export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "novo" }: Props) {
@@ -454,9 +588,11 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
     nomeEmpresa: "",
     nomeContato: "",
     idioma: "Português (Brasil)",
+    idiomaCodigo: "bp",
     pais: "BRASIL",
     paisCodigo: "BR",
     origem: "Indicação",
+    origemCodigo: "30", // "Indicação" no IFS -> Id30 (default de compatibilidade)
     mercado: "FINANCE - Financeiro",
     segmento: "Financeiro",
     potencial: "Médio",
@@ -494,6 +630,14 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
   const [paises, setPaises] = useState<PaisIFS[]>([]);
   const [modalPaises, setModalPaises] = useState(false);
   const [loadingPaises, setLoadingPaises] = useState(false);
+
+  const [idiomas, setIdiomas] = useState<IdiomaIFS[]>([]);
+  const [modalIdiomas, setModalIdiomas] = useState(false);
+  const [loadingIdiomas, setLoadingIdiomas] = useState(false);
+
+  const [origens, setOrigens] = useState<OrigemIFS[]>([]);
+  const [modalOrigens, setModalOrigens] = useState(false);
+  const [loadingOrigens, setLoadingOrigens] = useState(false);
 
   // Executivo de Vendas real (logado e já validado contra o IFS no login).
   // Vem do cache local — não precisa consultar o IFS de novo aqui.
@@ -537,6 +681,48 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
     setLoadingPaises(false);
   }
 };
+
+  const abrirModalIdiomas = async () => {
+    try {
+      setLoadingIdiomas(true);
+
+      // evita consultar o IFS toda vez que abrir
+      if (idiomas.length === 0) {
+        const lista = await buscarIdiomasIFS();
+        setIdiomas(lista);
+      }
+
+      setModalIdiomas(true);
+    } catch (err) {
+      Alert.alert(
+        "Erro",
+        "Não foi possível carregar a lista de idiomas."
+      );
+    } finally {
+      setLoadingIdiomas(false);
+    }
+  };
+
+  const abrirModalOrigens = async () => {
+    try {
+      setLoadingOrigens(true);
+
+      // evita consultar o IFS toda vez que abrir
+      if (origens.length === 0) {
+        const lista = await buscarOrigensIFS();
+        setOrigens(lista);
+      }
+
+      setModalOrigens(true);
+    } catch (err) {
+      Alert.alert(
+        "Erro",
+        "Não foi possível carregar a lista de origens."
+      );
+    } finally {
+      setLoadingOrigens(false);
+    }
+  };
   const setData = (partial: Partial<LeadData>) =>
     setDataState((prev) => ({ ...prev, ...partial }));
 
@@ -621,9 +807,11 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
         nomeContato:   data.nomeContato,
         cnpj:          data.cnpj,
         idioma:        data.idioma,
+        idiomaCodigo:  data.idiomaCodigo,
         pais:          data.pais,
         paisCodigo:    data.paisCodigo,
         origem:        data.origem,
+        origemCodigo:  data.origemCodigo,
         mercado:       data.mercado,
         segmento:      data.segmento,
         potencial:     data.potencial,
@@ -721,7 +909,9 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
           setData={setData}
           executivo={executivo}
           carregandoExecutivo={carregandoExecutivo}
+          onPressIdioma={abrirModalIdiomas}
           onPressPais={abrirModalPaises}
+          onPressOrigem={abrirModalOrigens}
         />
       </KeyboardAvoidingView>
 
@@ -790,6 +980,30 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
         onSelecionar={(item) => {
           setData({ pais: item.nome, paisCodigo: item.codigo });
           setModalPaises(false);
+        }}
+      />
+
+      <SeletorIdiomaModal
+        visible={modalIdiomas}
+        onClose={() => setModalIdiomas(false)}
+        idiomas={idiomas}
+        idiomaAtual={data.idioma}
+        carregando={loadingIdiomas}
+        onSelecionar={(item) => {
+          setData({ idioma: item.nome, idiomaCodigo: item.codigo });
+          setModalIdiomas(false);
+        }}
+      />
+
+      <SeletorOrigemModal
+        visible={modalOrigens}
+        onClose={() => setModalOrigens(false)}
+        origens={origens}
+        origemAtual={data.origem}
+        carregando={loadingOrigens}
+        onSelecionar={(item) => {
+          setData({ origem: item.nome, origemCodigo: item.codigo });
+          setModalOrigens(false);
         }}
       />
     </SafeAreaView>

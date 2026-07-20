@@ -228,6 +228,7 @@ export async function getEventoSelecionadoCache(): Promise<EventoLead | null> {
   }
 }
 
+// ─── Tipos de dados do IFS ─────────────────────────────────────────────────────
 
 export interface PaisIFS {
   codigo: string;
@@ -248,11 +249,14 @@ export interface MercadoIFS {
   codigo: string; // MarketCode
   nome: string;   // Description
 }
-// Reference_IsoCountry mora dentro do próprio BusinessLeadHandling.svc
-// (mesmo serviço usado pra criar o lead) — não existe um "CountryHandling.svc"
-// separado no IFS. É esse o endpoint correto:
-// https://tamifssup.avcweb.com.br:443/int/ifsapplications/projection/v1/BusinessLeadHandling.svc/Reference_IsoCountry
 
+export interface SegmentoIFS {
+  codigo: string; // ex.: código do segmento no IFS
+  nome: string;   // Description
+}
+
+
+// ─── Funções de busca de dados do IFS ─────────────────────────────────────────
 export async function buscarPaisesIFS(): Promise<PaisIFS[]> {
   try {
     const response = await fetch(
@@ -334,12 +338,6 @@ export async function buscarIdiomasIFS(): Promise<IdiomaIFS[]> {
 }
 
 // ─── Origens (CustomerSource) ────────────────────────────────────────────────
-//
-// Endpoint: CustomerSourcesHandling.svc/CustomerSourceSet
-// A API devolve SourceId "puro" (ex.: "20", "70", "LB26"). O IFS, na criação
-// do lead, espera o valor com prefixo "Id" (ex.: "Id20"). O prefixo é
-// aplicado no momento do envio (criarLeadIFS), não aqui, pra manter o código
-// exibido/selecionado igual ao que veio da API.
 
 const IFS_ORIGENS_URL = `${IFS_HOST}/CustomerSourcesHandling.svc`;
 
@@ -413,6 +411,68 @@ export async function buscarMercadosIFS(): Promise<MercadoIFS[]> {
   }
 }
 
+
+// ─── Cores dos Mercados (derivadas do IFS) ─────────────────────────────────
+//
+// Antes cada tela calculava a cor por hash do nome do mercado — o que causava
+// colisão (mercados diferentes com a mesma cor) e divergência entre telas
+// (paletas de tamanhos diferentes em cada arquivo). Agora a cor é atribuída
+// pela POSIÇÃO do mercado numa lista canônica vinda do IFS, ordenada por
+// MarketCode (estável). Isso garante mapeamento único e idêntico em
+// qualquer tela que chame esta função.
+
+const CORES_MERCADO = [
+  "#CC0000", // vermelho   (ex.: Financeiro)
+  "#F59E0B", // âmbar      (ex.: Energia)
+  "#22C55E", // verde      (ex.: Agronegócio)
+  "#6366F1", // índigo     (ex.: Tecnologia)
+  "#06B6D4", // ciano      (ex.: Saúde)
+  "#111111", // preto      (ex.: Infraestrutura)
+  "#8B5CF6", // roxo
+  "#EC4899", // rosa
+  "#F97316", // laranja
+  "#14B8A6", // teal
+  "#0EA5E9", // azul claro
+  "#A855F7", // violeta
+  "#84CC16", // lima
+  "#E11D48", // rosé escuro
+  "#FACC15", // amarelo
+  "#3B82F6", // azul
+];
+const COR_MERCADO_DESCONHECIDO = "#9CA3AF"; // cinza — para "—" ou mercado fora da lista IFS
+
+const MERCADO_CORES_CACHE_KEY = "mercadoCoresMap";
+
+export async function getMapaCoresMercados(forcarAtualizacao = false): Promise<Record<string, string>> {
+  if (!forcarAtualizacao) {
+    try {
+      const cached = await AsyncStorage.getItem(MERCADO_CORES_CACHE_KEY);
+      if (cached) return JSON.parse(cached) as Record<string, string>;
+    } catch {}
+  }
+
+  const mercados = await buscarMercadosIFS(); // já vem ordenado por nome
+  // Reordena por código (identificador estável no IFS) pra a posição não
+  // mudar se a Description de algum mercado for editada no futuro.
+  const ordenados = [...mercados].sort((a, b) => a.codigo.localeCompare(b.codigo));
+
+  const mapa: Record<string, string> = {};
+  ordenados.forEach((m, i) => {
+    mapa[m.nome] = CORES_MERCADO[i % CORES_MERCADO.length];
+  });
+
+  try {
+    await AsyncStorage.setItem(MERCADO_CORES_CACHE_KEY, JSON.stringify(mapa));
+  } catch (err) {
+    console.warn("[IFS] Falha ao cachear cores de mercado:", err);
+  }
+
+  return mapa;
+}
+
+export function corMercado(mapa: Record<string, string>, nomeMercado: string): string {
+  return mapa[nomeMercado] ?? COR_MERCADO_DESCONHECIDO;
+}
 // ─── Criar Lead ───────────────────────────────────────────────────────────────
 
 export async function criarLeadIFS(formData: {
@@ -424,7 +484,8 @@ export async function criarLeadIFS(formData: {
   pais?: string;
   paisCodigo?: string;
   origemCodigo?: string;
-  mercadoCodigo?: string; // ← novo: código do mercado (MarketCode), ex.: "FINANCE"
+  mercadoCodigo?: string; 
+  eventoObjkey?: string;
   dataCriacao?: string;
   mainRepresentativeId?: string;
   [key: string]: any;
@@ -499,6 +560,7 @@ export async function criarLeadIFS(formData: {
     Cf_Regiao_Do_Cliente: null,
     Cf_Segmento_De_Atuacao: null,
     Cf_Tipo_De_Negocio: null,
+    Cf_Evento_Lead: formData.eventoObjkey?.trim() || null,
   };
 
   console.log("[IFS] Payload:", JSON.stringify(payload, null, 2));

@@ -28,6 +28,8 @@ import {
   buscarOrigensIFS,
   MercadoIFS,
   buscarMercadosIFS,
+  EventoLead,
+  buscarEventosIFS,
 } from "./ifsService";
 
 import { LeadLocal, novoIdLocal, upsertLeadLocal } from "./leadsStore";
@@ -48,19 +50,16 @@ interface LeadData {
   nomeEmpresa: string;
   nomeContato: string;
   idioma: string;
-  idiomaCodigo: string; // código IFS do idioma (ex.: "bp"), vem junto com a seleção
-                        // no modal — é isso que vai no payload.
+  idiomaCodigo: string;
   pais: string;
-  paisCodigo: string; // código IFS do país (ex.: "BR"), vem junto com a seleção
-                       // no modal — é isso que vai no payload, não o nome.
+  paisCodigo: string;
   origem: string;
-  origemCodigo: string; // SourceId puro do IFS (ex.: "20", "LB26") — o
-                        // prefixo "Id" é aplicado no ifsService no envio.
+  origemCodigo: string;
   mercado: string; 
   mercadoCodigo: string; 
-
+  evento: string;        
+  eventoObjkey: string; 
   segmento: string;
-
   potencial: Potencial;
   dataCriacao: string;
   leadDuplicado: boolean;
@@ -246,9 +245,10 @@ const LeadFormContent: React.FC<{
   onPressIdioma: () => void;
   onPressPais: () => void;
   onPressOrigem: () => void;
+  onPressEvento: () => void;
   onPressMercado?: () => void;
   onPressSegmento?: () => void;
-}> = ({ data, setData, executivo, carregandoExecutivo, onPressIdioma, onPressPais, onPressOrigem, onPressMercado, onPressSegmento }) => (
+}> = ({ data, setData, executivo, carregandoExecutivo, onPressIdioma, onPressPais, onPressOrigem, onPressMercado, onPressEvento }) => (
   <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
     {/* Card principal */}
     <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
@@ -329,6 +329,21 @@ const LeadFormContent: React.FC<{
         <FieldLabel label="Origem" />
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
           <Text style={{ fontSize: 15, color: "#111", fontWeight: "500", flex: 1 }}>{data.origem}</Text>
+          <Ionicons name="chevron-down" size={16} color="#999" />
+        </View>
+      </TouchableOpacity>
+
+      {/* Evento — em qual evento o lead foi encontrado */}
+      <TouchableOpacity
+        onPress={onPressEvento}
+        activeOpacity={0.7}
+        style={{ backgroundColor: "#F4F4F6", borderRadius: 12, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 12, marginBottom: 10 }}
+      >
+        <FieldLabel label="Evento" />
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+          <Text style={{ fontSize: 15, color: "#111", fontWeight: "500", flex: 1 }} numberOfLines={1}>
+            {data.evento || ""}
+          </Text>
           <Ionicons name="chevron-down" size={16} color="#999" />
         </View>
       </TouchableOpacity>
@@ -682,6 +697,78 @@ const SeletorMercadoModal: React.FC<{
   </Modal>
 );
 
+
+const SeletorEventoModal: React.FC<{
+  visible: boolean;
+  onClose: () => void;
+  eventos: EventoLead[];
+  eventoAtual: string;
+  carregando: boolean;
+  onSelecionar: (evento: EventoLead) => void;
+}> = ({ visible, onClose, eventos, eventoAtual, carregando, onSelecionar }) => (
+  <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Pressable
+      style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", paddingHorizontal: 20 }}
+      onPress={onClose}
+    >
+      <Pressable
+        onPress={(e) => e.stopPropagation()}
+        style={{ backgroundColor: "#fff", borderRadius: 20, maxHeight: "70%", overflow: "hidden" }}
+      >
+        <View style={{ paddingHorizontal: 20, paddingTop: 18, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: "#F0F0F0" }}>
+          <Text style={{ fontSize: 16, fontWeight: "800", color: "#111" }}>Selecione um evento</Text>
+          <Text style={{ fontSize: 12, color: "#999", marginTop: 2 }}>Eventos cadastrados no IFS</Text>
+        </View>
+
+        {carregando ? (
+          <View style={{ paddingVertical: 40, alignItems: "center" }}>
+            <ActivityIndicator size="large" color="#CC0000" />
+          </View>
+        ) : eventos.length === 0 ? (
+          <View style={{ paddingVertical: 40, alignItems: "center", paddingHorizontal: 20 }}>
+            <Ionicons name="calendar-outline" size={40} color="#DDD" />
+            <Text style={{ color: "#BBB", marginTop: 10, fontSize: 13, textAlign: "center" }}>
+              Nenhum evento encontrado no IFS
+            </Text>
+          </View>
+        ) : (
+          <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+            {eventos.map((item) => {
+              const ativo = item.nome.trim().toUpperCase() === eventoAtual.trim().toUpperCase();
+              return (
+                <TouchableOpacity
+                  key={item.objkey}
+                  onPress={() => onSelecionar(item)}
+                  activeOpacity={0.7}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    paddingHorizontal: 20,
+                    paddingVertical: 14,
+                    borderBottomWidth: 1,
+                    borderBottomColor: "#F5F5F5",
+                    backgroundColor: ativo ? "#FFF5F5" : "#fff",
+                  }}
+                >
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={{ fontSize: 14.5, fontWeight: "700", color: "#111" }} numberOfLines={1}>
+                      {item.nome}
+                    </Text>
+                    {item.dataEvento ? (
+                      <Text style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{item.dataEvento}</Text>
+                    ) : null}
+                  </View>
+                  {ativo && <Ionicons name="checkmark-circle" size={20} color="#CC0000" />}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
+      </Pressable>
+    </Pressable>
+  </Modal>
+);
 // ─── Tela Principal ───────────────────────────────────────────────────────────
 
 export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "novo" }: Props) {
@@ -699,6 +786,8 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
     origemCodigo: "", // "Indicação" no IFS -> Id30 (default de compatibilidade)
     mercado: "",
     mercadoCodigo: "FINANCE",
+    evento: "",    
+    eventoObjkey: "",
     segmento: "Financeiro",
     potencial: "Médio",
     dataCriacao: formatDate(),
@@ -747,6 +836,10 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
   const [mercados, setMercados] = useState<MercadoIFS[]>([]);
   const [modalMercados, setModalMercados] = useState(false);
   const [loadingMercados, setLoadingMercados] = useState(false);
+
+  const [eventos, setEventos] = useState<EventoLead[]>([]);
+  const [modalEventos, setModalEventos] = useState(false);
+  const [loadingEventos, setLoadingEventos] = useState(false);
 
   // Executivo de Vendas real (logado e já validado contra o IFS no login).
   // Vem do cache local — não precisa consultar o IFS de novo aqui.
@@ -854,6 +947,23 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
   }
 };
 
+const abrirModalEventos = async () => {
+    try {
+      setLoadingEventos(true);
+
+      // evita consultar o IFS toda vez que abrir
+      if (eventos.length === 0) {
+        const lista = await buscarEventosIFS();
+        setEventos(lista);
+      }
+
+      setModalEventos(true);
+    } catch (err) {
+      Alert.alert("Erro", "Não foi possível carregar a lista de eventos.");
+    } finally {
+      setLoadingEventos(false);
+    }
+  };
 
   const setData = (partial: Partial<LeadData>) =>
     setDataState((prev) => ({ ...prev, ...partial }));
@@ -909,6 +1019,8 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
       telefone: data.telefone,
       email: data.email,
       executivoSecundario: data.executivoSecundario,
+      evento: data.evento,               
+      eventoObjkey: data.eventoObjkey,
       mainRepresentativeId: executivo?.id,
       executivoNome: executivo?.nome,
     };
@@ -946,6 +1058,7 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
         origemCodigo:  data.origemCodigo,
         mercado:       data.mercado,
         mercadoCodigo: data.mercadoCodigo,
+        eventoObjkey:  data.eventoObjkey,
         segmento:      data.segmento,
         potencial:     data.potencial,
         dataCriacao:   data.dataCriacao,
@@ -1045,6 +1158,7 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
           onPressIdioma={abrirModalIdiomas}
           onPressPais={abrirModalPaises}
           onPressOrigem={abrirModalOrigens}
+          onPressEvento={abrirModalEventos} 
           onPressMercado={abrirModalMercados}
         />
       </KeyboardAvoidingView>
@@ -1151,7 +1265,19 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
           setData({ mercado: item.nome, mercadoCodigo: item.codigo });
           setModalMercados(false);
         }}
-/>
+      />
+
+       <SeletorEventoModal
+        visible={modalEventos}
+        onClose={() => setModalEventos(false)}
+        eventos={eventos}
+        eventoAtual={data.evento}
+        carregando={loadingEventos}
+        onSelecionar={(item) => {
+          setData({ evento: item.nome, eventoObjkey: item.objkey });
+          setModalEventos(false);
+        }}
+      />
     </SafeAreaView>
 
   );

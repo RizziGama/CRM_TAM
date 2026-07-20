@@ -11,10 +11,12 @@ import {
   Alert,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
+import Svg, { Circle } from "react-native-svg";
 import NovoLeadScreen from "./NovoLeadScreen";
 import { AzureUserInfo, getUserInfo } from "@/components/azureAuth";
 import { LeadLocal, listarLeadsLocais } from "./leadsStore";
 import { EventoLead, getEventoSelecionadoCache } from "./ifsService";
+import { getMapaCoresMercados, corMercado } from "./ifsService";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -55,15 +57,6 @@ function formatarDataEvento(dataISO: string | undefined): string {
 // ─── Gráficos de Perfil ────────────────────────────────────────────────────────
 
 type Potencial = "Alto" | "Médio" | "Baixo";
-
-const SEGMENTOS_CONFIG: Record<string, string> = {
-  Financeiro:     "#CC0000",
-  Energia:        "#F59E0B",
-  Agronegócio:    "#22C55E",
-  Tecnologia:     "#6366F1",
-  Saúde:          "#06B6D4",
-  Infraestrutura: "#111111",
-};
 
 const POTENCIAL_CONFIG: Record<Potencial, string> = {
   Alto:  "#22C55E",
@@ -136,53 +129,58 @@ const Avatar: React.FC<{ initials: string; size?: number; bgColor?: string }> = 
   );
 };
 
-// ─── Donut Chart (pure RN, sem libs) ─────────────────────────────────────────
-
-function ArcSlice({ color, size, strokeWidth, startAngle, sweepAngle }: {
-  color: string; size: number; strokeWidth: number; startAngle: number; sweepAngle: number;
-}) {
-  if (sweepAngle <= 0) return null;
-  const half = size / 2;
-
-  const renderHalf = (start: number, sweep: number, key: string) => {
-    if (sweep <= 0) return null;
-    const clipped = Math.min(sweep, 180);
-    return (
-      <View key={key} style={{ position:"absolute", width:size, height:size, overflow:"hidden", transform:[{ rotate:`${start}deg` }] }}>
-        <View style={{ width:size, height:half, overflow:"hidden" }}>
-          <View style={{ width:size, height:size, borderRadius:half, borderWidth:strokeWidth, borderColor:color, transform:[{ rotate:`${clipped - 180}deg` }] }} />
-        </View>
-      </View>
-    );
-  };
-
-  if (sweepAngle <= 180) {
-    const el = renderHalf(startAngle, sweepAngle, "a");
-    return el ? <>{el}</> : null;
-  }
-  const el1 = renderHalf(startAngle, 180, "a");
-  const el2 = renderHalf(startAngle + 180, sweepAngle - 180, "b");
-  return <>{el1}{el2}</>;
-}
+// ─── Donut Chart (react-native-svg) ──────────────────────────────────────────
+// Antes, cada fatia era desenhada como um "anel" opaco completo, recortado com
+// overflow:hidden e rotacionado — o que fazia cada fatia nova cobrir por cima
+// as anteriores, deixando só a última cor visível. Aqui cada fatia é um traço
+// real de arco (strokeDasharray/strokeDashoffset em um <Circle> de SVG), então
+// elas se somam corretamente ao redor do círculo.
 
 function DonutChart({ total, slices }: { total: number; slices: { color: string; count: number }[] }) {
   const SIZE = 130;
-  const R = 46;
   const STROKE = 20;
+  const R = (SIZE - STROKE) / 2;
   const CIRCUM = 2 * Math.PI * R;
+
   let offset = 0;
   const arcs = slices.map((s) => {
-    const dash = (s.count / total) * CIRCUM;
-    const arc = { ...s, startAngle: (offset / CIRCUM) * 360, sweepAngle: (dash / CIRCUM) * 360 };
+    const dash = total > 0 ? (s.count / total) * CIRCUM : 0;
+    const arc = { ...s, dash, offset };
     offset += dash;
     return arc;
   });
 
   return (
-    <View style={{ width:SIZE, height:SIZE, alignItems:"center", justifyContent:"center" }}>
-      {arcs.map((a, i) => (
-        <ArcSlice key={i} color={a.color} size={SIZE} strokeWidth={STROKE} startAngle={a.startAngle} sweepAngle={a.sweepAngle} />
-      ))}
+    <View style={{ width: SIZE, height: SIZE, alignItems: "center", justifyContent: "center" }}>
+      <Svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
+        {/* trilho de fundo */}
+        <Circle
+          cx={SIZE / 2}
+          cy={SIZE / 2}
+          r={R}
+          stroke="#F0F0F0"
+          strokeWidth={STROKE}
+          fill="none"
+        />
+        {arcs.map((a, i) => (
+          a.dash > 0 ? (
+            <Circle
+              key={i}
+              cx={SIZE / 2}
+              cy={SIZE / 2}
+              r={R}
+              stroke={a.color}
+              strokeWidth={STROKE}
+              strokeDasharray={`${a.dash} ${CIRCUM - a.dash}`}
+              strokeDashoffset={-a.offset}
+              fill="none"
+              rotation={-90}
+              origin={`${SIZE / 2}, ${SIZE / 2}`}
+              strokeLinecap="butt"
+            />
+          ) : null
+        ))}
+      </Svg>
       <View style={{ position:"absolute", width:SIZE - STROKE * 2 - 6, height:SIZE - STROKE * 2 - 6, borderRadius:(SIZE - STROKE * 2 - 6) / 2, backgroundColor:"#fff", alignItems:"center", justifyContent:"center" }}>
         <Text style={{ fontSize:22, fontWeight:"800", color:"#111" }}>{total}</Text>
         <Text style={{ fontSize:9, color:"#999", fontWeight:"600", letterSpacing:0.5 }}>LEADS</Text>
@@ -235,28 +233,28 @@ function PotencialBar({ leads }: { leads: LeadLocal[] }) {
   );
 }
 
+
 // ─── Card Segmentos de Mercado ─────────────────────────────────────────────────
 
-function SegmentosCard({ leads }: { leads: LeadLocal[] }) {
-  const segCounts: Record<string, number> = {};
+function MercadosCard({ leads, coresMercado }: { leads: LeadLocal[]; coresMercado: Record<string, string> }) {
+  const mercadoCounts: Record<string, number> = {};
   leads.forEach((l) => {
-    const seg = l.segmento || l.mercado || "—";
-    segCounts[seg] = (segCounts[seg] || 0) + 1;
+    const mercado = l.mercado || "—";
+    mercadoCounts[mercado] = (mercadoCounts[mercado] || 0) + 1;
   });
 
-  const donutSlices = Object.entries(segCounts).map(([seg, count]) => ({
-    color: SEGMENTOS_CONFIG[seg] ?? "#999",
+  const donutSlices = Object.entries(mercadoCounts).map(([mercado, count]) => ({
+    color: corMercado(coresMercado, mercado),
     count,
-    label: seg,
+    label: mercado,
   }));
-
   const total = leads.length;
 
   return (
     <View style={{ backgroundColor:"#fff", borderRadius:16, padding:16, shadowColor:"#000", shadowOpacity:0.05, shadowRadius:4, elevation:1 }}>
       <View style={{ flexDirection:"row", alignItems:"center", gap:8, marginBottom:16 }}>
         <MaterialCommunityIcons name="chart-bar" size={17} color="#CC0000" />
-        <Text style={{ fontSize:14, fontWeight:"700", color:"#111" }}>Segmentos de Mercado</Text>
+        <Text style={{ fontSize:14, fontWeight:"700", color:"#111" }}>Mercados</Text>
       </View>
 
       {total === 0 ? (
@@ -266,13 +264,12 @@ function SegmentosCard({ leads }: { leads: LeadLocal[] }) {
       ) : (
         <View style={{ flexDirection:"row", alignItems:"center", gap:20 }}>
           <DonutChart total={total} slices={donutSlices} />
-
           <View style={{ flex:1, gap:8 }}>
             {donutSlices.map((s) => (
               <View key={s.label} style={{ flexDirection:"row", alignItems:"center", justifyContent:"space-between" }}>
                 <View style={{ flexDirection:"row", alignItems:"center", gap:7 }}>
                   <View style={{ width:10, height:10, borderRadius:5, backgroundColor:s.color }} />
-                  <Text style={{ fontSize:13, color:"#444" }}>{s.label}</Text>
+                  <Text style={{ fontSize:13, color:"#444" }} numberOfLines={1}>{s.label}</Text>
                 </View>
                 <Text style={{ fontSize:13, fontWeight:"700", color:"#111" }}>{s.count}</Text>
               </View>
@@ -308,10 +305,8 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, on
   const [search, setSearch] = useState("");
   const [novoLeadVisible, setNovoLeadVisible] = useState(false);
   const [userInfoState, setUserInfoState] = useState<AzureUserInfo | null>(null);
-  const [leadsRecentes, setLeadsRecentes] = useState<LeadLocal[]>([]);
   const [todosLeads, setTodosLeads] = useState<LeadLocal[]>([]);
-  const [totalLeads, setTotalLeads] = useState(0);
-  const [leadsHoje, setLeadsHoje] = useState(0);
+  const [coresMercado, setCoresMercado] = useState<Record<string, string>>({});
 
   const [eventoAtual, setEventoAtual] = useState<EventoLead | null>(null);
 
@@ -327,6 +322,10 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, on
   useEffect(() => {
     carregarEvento();
   }, [carregarEvento]);
+
+   useEffect(() => {
+    getMapaCoresMercados().then(setCoresMercado);
+  }, []);
 
   useEffect(() => {
     if (userInfoProp) return;
@@ -350,11 +349,6 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, on
 
   const carregarLeadsRecentes = useCallback(async () => {
     const todos = await listarLeadsLocais();
-    const hojeStr = new Date().toLocaleDateString("pt-BR");
-
-    setTotalLeads(todos.length);
-    setLeadsHoje(todos.filter((l) => l.dataCriacao === hojeStr).length);
-    setLeadsRecentes(todos.slice(0, 3));
     setTodosLeads(todos);
   }, []);
 
@@ -362,18 +356,27 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, on
     carregarLeadsRecentes();
   }, [carregarLeadsRecentes]);
 
+  const leadsDoEvento = eventoAtual
+  ? todosLeads.filter((l) => l.eventoObjkey === eventoAtual.objkey)
+  : [];
+
+  const hojeStr = new Date().toLocaleDateString("pt-BR");
+  const totalLeads = leadsDoEvento.length;
+  const leadsHoje = leadsDoEvento.filter((l) => l.dataCriacao === hojeStr).length;
+  const leadsRecentes = leadsDoEvento.slice(0, 3);
+
   // Sem busca: mostra só os 3 leads mais recentes (comportamento original).
   // Com busca: filtra por empresa/contato sobre TODOS os leads — mesmo
   // padrão de busca usado na LeadsScreen, não fica limitado aos 3 recentes.
   const leadsBase = search.trim() === ""
-    ? leadsRecentes
-    : todosLeads.filter((lead) => {
-        const termo = search.toLowerCase();
-        return (
-          (lead.nomeEmpresa || "").toLowerCase().includes(termo) ||
-          (lead.nomeContato || "").toLowerCase().includes(termo)
-        );
-      });
+  ? leadsRecentes
+  : leadsDoEvento.filter((lead) => {
+      const termo = search.toLowerCase();
+      return (
+        (lead.nomeEmpresa || "").toLowerCase().includes(termo) ||
+        (lead.nomeContato || "").toLowerCase().includes(termo)
+      );
+    });
 
   const leadsCard = leadsBase.map(paraCardResumido);
 
@@ -463,7 +466,7 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, on
 
         {/* Perfil de Clientes (Segmentos + Potencial) */}
         <View style={{ marginBottom: 20 }}>
-          <SegmentosCard leads={todosLeads} />
+          <MercadosCard leads={todosLeads} coresMercado={coresMercado} />
           <PotencialBar leads={todosLeads} />
         </View>
 

@@ -12,6 +12,7 @@ import {
   Alert,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import Svg, { Circle } from "react-native-svg";
 import NovoLeadScreen from "./NovoLeadScreen";
 import { LeadLocal, LeadStatus, listarLeadsLocais } from "./leadsStore";
 import {
@@ -19,7 +20,10 @@ import {
   buscarEventosIFS,
   cacheEventoSelecionado,
   getEventoSelecionadoCache,
+  getMapaCoresMercados, 
+  corMercado
 } from "./ifsService";
+
 
 // ─── Meta de fallback ─────────────────────────────────────────────────────────
 //
@@ -39,18 +43,9 @@ interface LeadEventoCard {
   badge: string;
   contato: string;
   status: LeadStatus;
-  segmento: string;
+  mercado: string;
   potencial: Potencial;
 }
-
-const SEGMENTOS_CONFIG: Record<string, string> = {
-  Financeiro:     "#CC0000",
-  Energia:        "#F59E0B",
-  Agronegócio:    "#22C55E",
-  Tecnologia:     "#6366F1",
-  Saúde:          "#06B6D4",
-  Infraestrutura: "#111111",
-};
 
 const POTENCIAL_CONFIG: Record<Potencial, string> = {
   Alto:  "#22C55E",
@@ -94,7 +89,7 @@ function paraCardEvento(lead: LeadLocal): LeadEventoCard {
     badge: lead.ifsLeadId ? `IFS #${lead.ifsLeadId}` : lead.cnpj || "S/ CNPJ",
     contato: lead.nomeContato || "—",
     status: lead.status,
-    segmento: lead.segmento || lead.mercado || "—",
+    mercado: lead.mercado || "—",
     potencial: normalizaPotencial(lead.potencial),
   };
 }
@@ -113,53 +108,58 @@ function formatarDataEvento(dataISO: string | undefined): string {
   return `${dia} ${mesLabel} ${ano}`;
 }
 
-// ─── Donut Chart (pure RN, sem libs) ─────────────────────────────────────────
-
-function ArcSlice({ color, size, strokeWidth, startAngle, sweepAngle }: {
-  color: string; size: number; strokeWidth: number; startAngle: number; sweepAngle: number;
-}) {
-  if (sweepAngle <= 0) return null;
-  const half = size / 2;
-
-  const renderHalf = (start: number, sweep: number, key: string) => {
-    if (sweep <= 0) return null;
-    const clipped = Math.min(sweep, 180);
-    return (
-      <View key={key} style={{ position:"absolute", width:size, height:size, overflow:"hidden", transform:[{ rotate:`${start}deg` }] }}>
-        <View style={{ width:size, height:half, overflow:"hidden" }}>
-          <View style={{ width:size, height:size, borderRadius:half, borderWidth:strokeWidth, borderColor:color, transform:[{ rotate:`${clipped - 180}deg` }] }} />
-        </View>
-      </View>
-    );
-  };
-
-  if (sweepAngle <= 180) {
-    const el = renderHalf(startAngle, sweepAngle, "a");
-    return el ? <>{el}</> : null;
-  }
-  const el1 = renderHalf(startAngle, 180, "a");
-  const el2 = renderHalf(startAngle + 180, sweepAngle - 180, "b");
-  return <>{el1}{el2}</>;
-}
+// ─── Donut Chart (react-native-svg) ──────────────────────────────────────────
+// Antes, cada fatia era desenhada como um "anel" opaco completo, recortado com
+// overflow:hidden e rotacionado — o que fazia cada fatia nova cobrir por cima
+// as anteriores, deixando só a última cor visível. Aqui cada fatia é um traço
+// real de arco (strokeDasharray/strokeDashoffset em um <Circle> de SVG), então
+// elas se somam corretamente ao redor do círculo.
 
 function DonutChart({ total, slices }: { total: number; slices: { color: string; count: number }[] }) {
   const SIZE = 130;
-  const R = 46;
   const STROKE = 20;
+  const R = (SIZE - STROKE) / 2;
   const CIRCUM = 2 * Math.PI * R;
+
   let offset = 0;
   const arcs = slices.map((s) => {
-    const dash = (s.count / total) * CIRCUM;
-    const arc = { ...s, startAngle: (offset / CIRCUM) * 360, sweepAngle: (dash / CIRCUM) * 360 };
+    const dash = total > 0 ? (s.count / total) * CIRCUM : 0;
+    const arc = { ...s, dash, offset };
     offset += dash;
     return arc;
   });
 
   return (
-    <View style={{ width:SIZE, height:SIZE, alignItems:"center", justifyContent:"center" }}>
-      {arcs.map((a, i) => (
-        <ArcSlice key={i} color={a.color} size={SIZE} strokeWidth={STROKE} startAngle={a.startAngle} sweepAngle={a.sweepAngle} />
-      ))}
+    <View style={{ width: SIZE, height: SIZE, alignItems: "center", justifyContent: "center" }}>
+      <Svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
+        {/* trilho de fundo */}
+        <Circle
+          cx={SIZE / 2}
+          cy={SIZE / 2}
+          r={R}
+          stroke="#F0F0F0"
+          strokeWidth={STROKE}
+          fill="none"
+        />
+        {arcs.map((a, i) => (
+          a.dash > 0 ? (
+            <Circle
+              key={i}
+              cx={SIZE / 2}
+              cy={SIZE / 2}
+              r={R}
+              stroke={a.color}
+              strokeWidth={STROKE}
+              strokeDasharray={`${a.dash} ${CIRCUM - a.dash}`}
+              strokeDashoffset={-a.offset}
+              fill="none"
+              rotation={-90}
+              origin={`${SIZE / 2}, ${SIZE / 2}`}
+              strokeLinecap="butt"
+            />
+          ) : null
+        ))}
+      </Svg>
       {/* Centro */}
       <View style={{ position:"absolute", width:SIZE - STROKE * 2 - 6, height:SIZE - STROKE * 2 - 6, borderRadius:(SIZE - STROKE * 2 - 6) / 2, backgroundColor:"#fff", alignItems:"center", justifyContent:"center" }}>
         <Text style={{ fontSize:22, fontWeight:"800", color:"#111" }}>{total}</Text>
@@ -229,7 +229,8 @@ function TabLeads({
   leads: LeadEventoCard[];
   onLeadPress: (id: string) => void;
 }) {
-  const statusCfg: Record<Exclude<LeadStatus, "sync">, { icon: string; color: string; label: string; bg: string }> = {
+  const statusCfg: Record<LeadStatus, { icon: string; color: string; label: string; bg: string }> = {
+    sync:     { icon:"checkmark-circle",     color:"#22C55E", label:"Sync",  bg:"#F0FDF4" },
     pendente: { icon:"time-outline",         color:"#F59E0B", label:"Pend.", bg:"#FFFBEB" },
     erro:     { icon:"alert-circle-outline", color:"#CC0000", label:"Erro",  bg:"#FFF0F0" },
   };
@@ -237,9 +238,9 @@ function TabLeads({
   if (leads.length === 0) {
     return (
       <View style={{ alignItems:"center", paddingTop:60 }}>
-        <Ionicons name="checkmark-done-circle-outline" size={48} color="#DDD" />
+        <Ionicons name="people-outline" size={48} color="#DDD" />
         <Text style={{ color:"#BBB", marginTop:12, fontSize:14, textAlign:"center" }}>
-          Nenhum lead pendente ou com erro{"\n"}neste evento
+          Nenhum lead cadastrado{"\n"}neste evento
         </Text>
       </View>
     );
@@ -248,7 +249,7 @@ function TabLeads({
   return (
     <>
       {leads.map((lead) => {
-        const cfg = statusCfg[lead.status as Exclude<LeadStatus, "sync">];
+        const cfg = statusCfg[lead.status];
         return (
           <TouchableOpacity
             key={lead.id}
@@ -257,12 +258,10 @@ function TabLeads({
             style={{ backgroundColor:"#fff", borderRadius:14, paddingHorizontal:16, paddingVertical:14, marginBottom:10, shadowColor:"#000", shadowOpacity:0.05, shadowRadius:4, elevation:1 }}
           >
             <View style={{ flexDirection:"row", alignItems:"center" }}>
-              {/* Avatar */}
               <View style={{ width:44, height:44, borderRadius:22, backgroundColor:lead.bgColor, alignItems:"center", justifyContent:"center", marginRight:12 }}>
                 <Text style={{ color:"#fff", fontWeight:"700", fontSize:15 }}>{lead.initials}</Text>
               </View>
 
-              {/* Info */}
               <View style={{ flex:1 }}>
                 <View style={{ flexDirection:"row", alignItems:"center", gap:8 }}>
                   <Text style={{ fontSize:14, fontWeight:"800", color:"#111" }} numberOfLines={1}>{lead.empresa}</Text>
@@ -273,7 +272,6 @@ function TabLeads({
                 <Text style={{ fontSize:12, color:"#888", marginTop:2 }}>{lead.contato}</Text>
               </View>
 
-              {/* Status badge */}
               <View style={{ flexDirection:"row", alignItems:"center", gap:4, backgroundColor:cfg.bg, borderRadius:8, paddingHorizontal:8, paddingVertical:4 }}>
                 <Ionicons name={cfg.icon as any} size={13} color={cfg.color} />
                 <Text style={{ fontSize:11, fontWeight:"700", color:cfg.color }}>{cfg.label}</Text>
@@ -293,28 +291,27 @@ function TabLeads({
 // Análises (segmento/potencial) consideram TODOS os leads reais do evento,
 // inclusive os já sincronizados — é uma visão agregada de reporte, não uma
 // listagem editável, então não faz sentido excluir os sincronizados aqui.
-
-function TabPerfil({ leads }: { leads: LeadEventoCard[] }) {
-  const segCounts: Record<string, number> = {};
+function TabPerfil({ leads, coresMercado }: { leads: LeadEventoCard[]; coresMercado: Record<string, string> }) {
+  const mercadoCounts: Record<string, number> = {};
   leads.forEach((l) => {
-    segCounts[l.segmento] = (segCounts[l.segmento] || 0) + 1;
+    mercadoCounts[l.mercado] = (mercadoCounts[l.mercado] || 0) + 1;
   });
 
-  const donutSlices = Object.entries(segCounts).map(([seg, count]) => ({
-    color: SEGMENTOS_CONFIG[seg] ?? "#999",
+  const donutSlices = Object.entries(mercadoCounts).map(([mercado, count]) => ({
+    color: corMercado(coresMercado, mercado),
     count,
-    label: seg,
+    label: mercado,
   }));
 
   const total = leads.length;
 
   return (
     <>
-      {/* Card Segmentos */}
+      {/* Card Mercados */}
       <View style={{ backgroundColor:"#fff", borderRadius:16, padding:16, shadowColor:"#000", shadowOpacity:0.05, shadowRadius:4, elevation:1 }}>
         <View style={{ flexDirection:"row", alignItems:"center", gap:8, marginBottom:16 }}>
           <MaterialCommunityIcons name="chart-bar" size={17} color="#CC0000" />
-          <Text style={{ fontSize:14, fontWeight:"700", color:"#111" }}>Segmentos de Mercado</Text>
+          <Text style={{ fontSize:14, fontWeight:"700", color:"#111" }}>Mercados</Text>
         </View>
 
         {total === 0 ? (
@@ -555,11 +552,21 @@ export default function AgendaScreen() {
   const [eventoAtual, setEventoAtual] = useState<EventoLead | null>(null);
   const [carregandoEventos, setCarregandoEventos] = useState(true);
   const [seletorVisible, setSeletorVisible] = useState(false);
+  const [coresMercado, setCoresMercado] = useState<Record<string, string>>({});
 
   const carregarLeads = useCallback(async () => {
     const lista = await listarLeadsLocais();
     setLeads(lista);
     setCarregando(false);
+  }, []);
+
+  // NOVO — só os leads do evento atualmente selecionado
+  const leadsDoEvento = eventoAtual
+    ? leads.filter((l) => l.eventoObjkey === eventoAtual.objkey)
+    : [];
+
+   useEffect(() => {
+    getMapaCoresMercados().then(setCoresMercado);
   }, []);
 
   useEffect(() => {
@@ -617,16 +624,15 @@ export default function AgendaScreen() {
     carregarEventos();
   };
 
-  // Cards derivados dos leads reais (todos, pra estatísticas/perfil).
-  const leadsCard = leads.map(paraCardEvento);
+  // Cards derivados — agora só do evento
+  const leadsCard = leadsDoEvento.map(paraCardEvento);  
 
-  // Só os não sincronizados entram na aba "Leads" (editável).
-  const leadsEditaveis = leadsCard.filter((l) => l.status !== "sync");
+ 
 
-  const total = leads.length;
-  const syncCount = leads.filter((l) => l.status === "sync").length;
-  const pendenteCount = leads.filter((l) => l.status === "pendente").length;
-  const erroCount = leads.filter((l) => l.status === "erro").length;
+  const total = leadsDoEvento.length;
+  const syncCount = leadsDoEvento.filter((l) => l.status === "sync").length;
+  const pendenteCount = leadsDoEvento.filter((l) => l.status === "pendente").length;
+  const erroCount = leadsDoEvento.filter((l) => l.status === "erro").length;
 
   const metaTotal = eventoAtual?.metaLeads && eventoAtual.metaLeads > 0 ? eventoAtual.metaLeads : META_FALLBACK;
   const progresso = total > 0 ? Math.min(Math.round((total / metaTotal) * 100), 100) : 0;
@@ -760,9 +766,9 @@ export default function AgendaScreen() {
             </>
           )}
 
-          {tab === "leads" && <TabLeads leads={leadsEditaveis} onLeadPress={handleLeadPress} />}
+          {tab === "leads" && <TabLeads leads={leadsCard} onLeadPress={handleLeadPress} />}
 
-          {tab === "perfil" && <TabPerfil leads={leadsCard} />}
+          {tab === "perfil" && <TabPerfil leads={leadsCard} coresMercado={coresMercado} />}
         </ScrollView>
       )}
 

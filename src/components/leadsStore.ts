@@ -33,6 +33,9 @@ export interface LeadLocal {
   email: string;
   executivoSecundario: string;
 
+  evento?: string;         // nome do evento (exibição)
+  eventoObjkey?: string;   // Objkey do evento no IFS — usado pra filtrar
+
   // Executivo responsável no momento da criação (pra manter atribuição
   // correta mesmo que outro usuário reenvie depois)
   mainRepresentativeId?: string;

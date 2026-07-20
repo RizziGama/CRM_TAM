@@ -244,6 +244,10 @@ export interface OrigemIFS {
   nome: string;     // Description
 }
 
+export interface MercadoIFS {
+  codigo: string; // MarketCode
+  nome: string;   // Description
+}
 // Reference_IsoCountry mora dentro do próprio BusinessLeadHandling.svc
 // (mesmo serviço usado pra criar o lead) — não existe um "CountryHandling.svc"
 // separado no IFS. É esse o endpoint correto:
@@ -374,6 +378,41 @@ export async function buscarOrigensIFS(): Promise<OrigemIFS[]> {
   }
 }
 
+export async function buscarMercadosIFS(): Promise<MercadoIFS[]> {
+  try {
+    const response = await fetch(
+      `${IFS_REPRESENTATIVE_URL}/Reference_SalesMarket?$select=MarketCode,Description`,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: basicAuth,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      console.warn(`[IFS] Erro ao buscar mercados: ${response.status}`);
+      return [];
+    }
+
+    const json = await response.json();
+
+    return (json?.value ?? [])
+      .map((item: any) => ({
+        codigo: String(item.MarketCode ?? "").trim(),
+        nome: String(item.Description ?? "").trim() || String(item.MarketCode ?? ""),
+      }))
+      .filter((m: MercadoIFS) => m.codigo)
+      .sort((a: MercadoIFS, b: MercadoIFS) =>
+        a.nome.localeCompare(b.nome, "pt-BR")
+      );
+  } catch (err) {
+    console.error("[IFS] Erro ao buscar mercados:", err);
+    return [];
+  }
+}
+
 // ─── Criar Lead ───────────────────────────────────────────────────────────────
 
 export async function criarLeadIFS(formData: {
@@ -381,17 +420,13 @@ export async function criarLeadIFS(formData: {
   nomeContato?: string;
   cnpj?: string;
   idioma?: string;
-  idiomaCodigo?: string; // código do idioma (ex.: "bp") já resolvido na tela, vindo
-                        // da seleção do usuário no modal — evita o mapeamento fixo.
+  idiomaCodigo?: string;
   pais?: string;
-  paisCodigo?: string; // código do país (ex.: "BR") já resolvido na tela, vindo
-                       // da seleção do usuário no modal — evita ter que
-                       // rebuscar a lista de países e reconciliar pelo nome.
-  origemCodigo?: string; // código puro da origem (ex.: "20", "LB26") — o
-                         // prefixo "Id" é aplicado abaixo, pois é isso que o
-                         // IFS espera no campo SourceId (ex.: "Id20").
+  paisCodigo?: string;
+  origemCodigo?: string;
+  mercadoCodigo?: string; // ← novo: código do mercado (MarketCode), ex.: "FINANCE"
   dataCriacao?: string;
-  mainRepresentativeId?: string; // ID real do executivo logado (vem do IFS)
+  mainRepresentativeId?: string;
   [key: string]: any;
 }): Promise<IFSApiResponse> {
 
@@ -430,7 +465,7 @@ export async function criarLeadIFS(formData: {
     SourceId: sourceIdIFS,
     StageId: null,
     MainRepresentativeId: formData.mainRepresentativeId ?? "197",
-    MarketCode: null,
+    MarketCode: formData.mercadoCodigo?.trim() || null,
     Note: null,
     CreationDate: formatDateToISO(formData.dataCriacao ?? ""),
     CurrentUser: "INTEGRACAO",

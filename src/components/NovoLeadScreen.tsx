@@ -15,7 +15,21 @@ import {
   Pressable,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
-import { criarLeadIFS, getExecutivoCache, ExecutivoInfo, PaisIFS, buscarPaisesIFS, IdiomaIFS, buscarIdiomasIFS, OrigemIFS, buscarOrigensIFS } from "./ifsService";
+
+import {
+  criarLeadIFS,
+  getExecutivoCache,
+  ExecutivoInfo,
+  PaisIFS,
+  buscarPaisesIFS,
+  IdiomaIFS,
+  buscarIdiomasIFS,
+  OrigemIFS,
+  buscarOrigensIFS,
+  MercadoIFS,
+  buscarMercadosIFS,
+} from "./ifsService";
+
 import { LeadLocal, novoIdLocal, upsertLeadLocal } from "./leadsStore";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -42,8 +56,11 @@ interface LeadData {
   origem: string;
   origemCodigo: string; // SourceId puro do IFS (ex.: "20", "LB26") — o
                         // prefixo "Id" é aplicado no ifsService no envio.
-  mercado: string;
+  mercado: string; 
+  mercadoCodigo: string; 
+
   segmento: string;
+
   potencial: Potencial;
   dataCriacao: string;
   leadDuplicado: boolean;
@@ -219,7 +236,7 @@ const CardExecutivo: React.FC<{ executivo: ExecutivoInfo | null; carregando: boo
   </View>
 );
 
-// ─── Conteúdo do formulário (antes era a aba "Diversos"; agora é a tela toda) ─
+// ─── Conteúdo do formulário 
 
 const LeadFormContent: React.FC<{
   data: LeadData;
@@ -229,7 +246,9 @@ const LeadFormContent: React.FC<{
   onPressIdioma: () => void;
   onPressPais: () => void;
   onPressOrigem: () => void;
-}> = ({ data, setData, executivo, carregandoExecutivo, onPressIdioma, onPressPais, onPressOrigem }) => (
+  onPressMercado?: () => void;
+  onPressSegmento?: () => void;
+}> = ({ data, setData, executivo, carregandoExecutivo, onPressIdioma, onPressPais, onPressOrigem, onPressMercado, onPressSegmento }) => (
   <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
     {/* Card principal */}
     <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
@@ -272,8 +291,10 @@ const LeadFormContent: React.FC<{
         errorText="Informe um e-mail válido (ex.: nome@dominio.com)"
       />
 
-      {/* Idioma + País */}
+
+      {/* linha idioma e pais lado a lado */}
       <View style={{ flexDirection: "row", gap: 10, marginBottom: 10 }}>
+
         <TouchableOpacity
           onPress={onPressIdioma}
           activeOpacity={0.7}
@@ -297,8 +318,9 @@ const LeadFormContent: React.FC<{
             <Ionicons name="chevron-down" size={14} color="#999" />
           </View>
         </TouchableOpacity>
-      </View>
 
+      </View>
+      
       <TouchableOpacity
         onPress={onPressOrigem}
         activeOpacity={0.7}
@@ -317,8 +339,36 @@ const LeadFormContent: React.FC<{
 
     {/* Card campos adicionais */}
     <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
-      <SelectField label="Mercado" value={data.mercado} />
-      <SelectField label="Segmento" value={data.segmento} />
+
+    {/* linha mercado e segmento lado a lado */}
+    <View style={{ flexDirection: "row", gap: 10, marginBottom: 10 }}>
+
+        <TouchableOpacity
+          onPress={onPressMercado}
+          activeOpacity={0.7}
+          style={{ flex: 1, backgroundColor: "#F4F4F6", borderRadius: 12, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12 }}
+        >
+          <FieldLabel label="Mercado" />
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+            <Text style={{ fontSize: 14, color: "#111", fontWeight: "500", flex: 1 }}>{data.mercado}</Text>
+            <Ionicons name="chevron-down" size={14} color="#999" />
+          </View>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          onPress={onPressSegmento}
+          activeOpacity={0.7}
+          style={{ flex: 1, backgroundColor: "#F4F4F6", borderRadius: 12, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12 }}
+        >
+          <FieldLabel label="Segmento" />
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+            <Text style={{ fontSize: 14, color: "#111", fontWeight: "700", flex: 1 }}>{data.segmento}</Text>
+            <Ionicons name="chevron-down" size={14} color="#999" />
+          </View>
+        </TouchableOpacity>
+
+      </View>
+     
 
       {/* Potencial do Lead */}
       <View style={{ marginBottom: 14 }}>
@@ -576,7 +626,72 @@ const SeletorOrigemModal: React.FC<{
   </Modal>
 );
 
+const SeletorMercadoModal: React.FC<{
+  visible: boolean;
+  onClose: () => void;
+  mercados: MercadoIFS[];
+  mercadoAtual: string;
+  carregando: boolean;
+  onSelecionar: (mercado: MercadoIFS) => void;
+}> = ({ visible, onClose, mercados, mercadoAtual, carregando, onSelecionar }) => (
+  <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Pressable
+      style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", paddingHorizontal: 20 }}
+      onPress={onClose}
+    >
+      <Pressable
+        onPress={(e) => e.stopPropagation()}
+        style={{ backgroundColor: "#fff", borderRadius: 20, maxHeight: "70%", overflow: "hidden" }}
+      >
+        <View style={{ paddingHorizontal: 20, paddingTop: 18, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: "#F0F0F0" }}>
+          <Text style={{ fontSize: 16, fontWeight: "800", color: "#111" }}>Selecione um mercado</Text>
+          <Text style={{ fontSize: 12, color: "#999", marginTop: 2 }}>Mercados cadastrados no IFS</Text>
+        </View>
 
+        {carregando ? (
+          <View style={{ paddingVertical: 40, alignItems: "center" }}>
+            <ActivityIndicator size="large" color="#CC0000" />
+          </View>
+        ) : mercados.length === 0 ? (
+          <View style={{ paddingVertical: 40, alignItems: "center", paddingHorizontal: 20 }}>
+            <MaterialCommunityIcons name="chart-line" size={40} color="#DDD" />
+            <Text style={{ color: "#BBB", marginTop: 10, fontSize: 13, textAlign: "center" }}>
+              Nenhum mercado encontrado no IFS
+            </Text>
+          </View>
+        ) : (
+          <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+            {mercados.map((item) => {
+              const ativo = item.nome.trim().toUpperCase() === mercadoAtual.trim().toUpperCase();
+              return (
+                <TouchableOpacity
+                  key={item.codigo}
+                  onPress={() => onSelecionar(item)}
+                  activeOpacity={0.7}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    paddingHorizontal: 20,
+                    paddingVertical: 14,
+                    borderBottomWidth: 1,
+                    borderBottomColor: "#F5F5F5",
+                    backgroundColor: ativo ? "#FFF5F5" : "#fff",
+                  }}
+                >
+                  <Text style={{ fontSize: 14.5, fontWeight: "700", color: "#111" }} numberOfLines={1}>
+                    {item.nome}
+                  </Text>
+                  {ativo && <Ionicons name="checkmark-circle" size={20} color="#CC0000" />}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
+      </Pressable>
+    </Pressable>
+  </Modal>
+);
 
 // ─── Tela Principal ───────────────────────────────────────────────────────────
 
@@ -587,13 +702,14 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
     cnpj: "",
     nomeEmpresa: "",
     nomeContato: "",
-    idioma: "Português (Brasil)",
+    idioma: "",
     idiomaCodigo: "bp",
-    pais: "BRASIL",
+    pais: "",
     paisCodigo: "BR",
-    origem: "Indicação",
-    origemCodigo: "30", // "Indicação" no IFS -> Id30 (default de compatibilidade)
-    mercado: "FINANCE - Financeiro",
+    origem: "",
+    origemCodigo: "", // "Indicação" no IFS -> Id30 (default de compatibilidade)
+    mercado: "",
+    mercadoCodigo: "FINANCE",
     segmento: "Financeiro",
     potencial: "Médio",
     dataCriacao: formatDate(),
@@ -626,7 +742,7 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
   }, []);
 
 
-  
+  //-------------useState para armazenar os dados do IFS (países, idiomas, origens, mercados)
   const [paises, setPaises] = useState<PaisIFS[]>([]);
   const [modalPaises, setModalPaises] = useState(false);
   const [loadingPaises, setLoadingPaises] = useState(false);
@@ -638,6 +754,10 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
   const [origens, setOrigens] = useState<OrigemIFS[]>([]);
   const [modalOrigens, setModalOrigens] = useState(false);
   const [loadingOrigens, setLoadingOrigens] = useState(false);
+
+  const [mercados, setMercados] = useState<MercadoIFS[]>([]);
+  const [modalMercados, setModalMercados] = useState(false);
+  const [loadingMercados, setLoadingMercados] = useState(false);
 
   // Executivo de Vendas real (logado e já validado contra o IFS no login).
   // Vem do cache local — não precisa consultar o IFS de novo aqui.
@@ -723,6 +843,29 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
       setLoadingOrigens(false);
     }
   };
+
+  const abrirModalMercados = async () => {
+  try {
+    setLoadingMercados(true);
+
+    // evita consultar o IFS toda vez que abrir
+    if (mercados.length === 0) {
+      const lista = await buscarMercadosIFS();
+      setMercados(lista);
+    }
+
+    setModalMercados(true);
+  } catch (err) {
+    Alert.alert(
+      "Erro",
+      "Não foi possível carregar a lista de mercados."
+    );
+  } finally {
+    setLoadingMercados(false);
+  }
+};
+
+
   const setData = (partial: Partial<LeadData>) =>
     setDataState((prev) => ({ ...prev, ...partial }));
 
@@ -802,7 +945,7 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
     try {
       await upsertLeadLocal(leadLocalBase);
 
-      const result = await criarLeadIFS({
+    const result = await criarLeadIFS({
         nomeEmpresa:   data.nomeEmpresa,
         nomeContato:   data.nomeContato,
         cnpj:          data.cnpj,
@@ -813,6 +956,7 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
         origem:        data.origem,
         origemCodigo:  data.origemCodigo,
         mercado:       data.mercado,
+        mercadoCodigo: data.mercadoCodigo,
         segmento:      data.segmento,
         potencial:     data.potencial,
         dataCriacao:   data.dataCriacao,
@@ -912,6 +1056,7 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
           onPressIdioma={abrirModalIdiomas}
           onPressPais={abrirModalPaises}
           onPressOrigem={abrirModalOrigens}
+          onPressMercado={abrirModalMercados}
         />
       </KeyboardAvoidingView>
 
@@ -1006,6 +1151,19 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
           setModalOrigens(false);
         }}
       />
+
+      <SeletorMercadoModal
+        visible={modalMercados}
+        onClose={() => setModalMercados(false)}
+        mercados={mercados}
+        mercadoAtual={data.mercado}
+        carregando={loadingMercados}
+        onSelecionar={(item) => {
+          setData({ mercado: item.nome, mercadoCodigo: item.codigo });
+          setModalMercados(false);
+        }}
+/>
     </SafeAreaView>
+
   );
 }

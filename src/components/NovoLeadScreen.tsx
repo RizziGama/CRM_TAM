@@ -355,17 +355,6 @@ const LeadFormContent: React.FC<{
           </View>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          onPress={onPressSegmento}
-          activeOpacity={0.7}
-          style={{ flex: 1, backgroundColor: "#F4F4F6", borderRadius: 12, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 12 }}
-        >
-          <FieldLabel label="Segmento" />
-          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-            <Text style={{ fontSize: 14, color: "#111", fontWeight: "700", flex: 1 }}>{data.segmento}</Text>
-            <Ionicons name="chevron-down" size={14} color="#999" />
-          </View>
-        </TouchableOpacity>
 
       </View>
      

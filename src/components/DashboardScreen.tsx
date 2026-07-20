@@ -466,8 +466,8 @@ const DashboardScreen: React.FC<DashboardProps> = ({ onLeadPress, onVerTodos, on
 
         {/* Perfil de Clientes (Segmentos + Potencial) */}
         <View style={{ marginBottom: 20 }}>
-          <MercadosCard leads={todosLeads} coresMercado={coresMercado} />
-          <PotencialBar leads={todosLeads} />
+          <MercadosCard leads={leadsDoEvento} coresMercado={coresMercado} />
+          <PotencialBar leads={leadsDoEvento} />
         </View>
 
         {/* Search — agora abaixo da barra de Potencial. Funciona igual à

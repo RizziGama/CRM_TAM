@@ -94,3 +94,15 @@ export async function buscarLeadLocalPorId(id: string): Promise<LeadLocal | null
   const lista = await lerLista();
   return lista.find((l) => l.id === id) ?? null;
 }
+
+// Limpa TODO o cache local de leads (AsyncStorage). Não afeta o que já
+// está sincronizado no IFS — apenas remove os registros salvos no
+// dispositivo (histórico local de pendentes/erro/sync).
+export async function limparCacheLeadsLocais(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(STORAGE_KEY);
+  } catch (err) {
+    console.warn("[leadsStore] Falha ao limpar cache local de leads:", err);
+    throw err;
+  }
+}

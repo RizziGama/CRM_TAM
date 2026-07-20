@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Modal, Platform, Text, TouchableOpacity, View } from "react-native";
 import AgendaScreen from "./AgendaScreen";
 import DashboardScreen from "./DashboardScreen";
-import LeadsScreen from "./LeadsScreen";
+import LeadsScreen from   "./LeadsScreen";
 import NovoLeadScreen from "./NovoLeadScreen";
 import { AzureUserInfo, getUserInfo } from "@/components/azureAuth";
 import { UserMenu } from "@/components/UserMenu";

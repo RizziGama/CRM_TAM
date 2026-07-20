@@ -19,6 +19,7 @@ import {
   LeadStatus,
   listarLeadsLocais,
   upsertLeadLocal,
+  limparCacheLeadsLocais
 } from "./leadsStore";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -279,6 +280,33 @@ export default function LeadsScreen() {
     }
   };
 
+
+  const [limpandoCache, setLimpandoCache] = useState(false);
+
+const handleLimparCache = () => {
+  Alert.alert(
+    "Limpar cache de leads",
+    "Isso vai apagar todos os leads salvos localmente neste dispositivo, inclusive os que ainda não foram sincronizados com o IFS (pendentes ou com erro). Essa ação não pode ser desfeita. Deseja continuar?",
+    [
+      { text: "Cancelar", style: "cancel" },
+      {
+        text: "Limpar",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            setLimpandoCache(true);
+            await limparCacheLeadsLocais();
+            await carregarLeads();
+          } catch (err) {
+            Alert.alert("Erro", "Não foi possível limpar o cache. Tente novamente.");
+          } finally {
+            setLimpandoCache(false);
+          }
+        },
+      },
+    ]
+  );
+};
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: "#F4F4F6" }}>
       <StatusBar barStyle="dark-content" backgroundColor="#F4F4F6" />
@@ -307,13 +335,13 @@ export default function LeadsScreen() {
         />
       </Modal>
 
-      {/* ── Header ───────────────────────────────────────────────────────── */}
-      <View style={{ paddingHorizontal: 20, paddingTop: 14, paddingBottom: 10 }}>
-        <Text style={{ fontSize: 24, fontWeight: "800", color: "#111" }}>Pipeline de Leads</Text>
-        <Text style={{ fontSize: 13, color: "#888", marginTop: 2 }}>
-          {leadsCard.length} leads cadastrados
-        </Text>
-      </View>
+    {/* ── Header ───────────────────────────────────────────────────────── */}
+    <View style={{ paddingHorizontal: 20, paddingTop: 14, paddingBottom: 10 }}>
+      <Text style={{ fontSize: 24, fontWeight: "800", color: "#111" }}>Pipeline de Leads</Text>
+      <Text style={{ fontSize: 13, color: "#888", marginTop: 2 }}>
+        {leadsCard.length} leads aguardando sincronização
+      </Text>
+    </View>
 
       {/* ── Search ───────────────────────────────────────────────────────── */}
       <View style={{ paddingHorizontal: 20, marginBottom: 12 }}>
@@ -334,40 +362,68 @@ export default function LeadsScreen() {
         </View>
       </View>
 
-      {/* ── Filtros de Status ─────────────────────────────────────────────── */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 20, gap: 8, marginBottom: 12 }}
-        style={{ maxHeight: 46, flexGrow: 0 }}
-      >
-        {FILTROS.map((f) => {
-          const active = filtro === f.key;
-          const count = f.key === "todos" ? leadsCard.length : leadsCard.filter((l) => l.status === f.key).length;
-          return (
-            <TouchableOpacity
-              key={f.key}
-              onPress={() => setFiltro(f.key)}
-              style={{
-                flexDirection: "row", alignItems: "center", gap: 6,
-                paddingHorizontal: 16, paddingVertical: 8, borderRadius: 24,
-                backgroundColor: active ? "#111" : "#fff",
-                borderWidth: active ? 0 : 1, borderColor: "#E0E0E0",
-              }}
-              activeOpacity={0.8}
-            >
-              <Text style={{ fontSize: 13, fontWeight: "600", color: active ? "#fff" : "#555" }}>
-                {f.label}
-              </Text>
-              <View style={{ backgroundColor: active ? "rgba(255,255,255,0.2)" : "#F0F0F0", borderRadius: 10, paddingHorizontal: 6, paddingVertical: 1 }}>
-                <Text style={{ fontSize: 11, fontWeight: "700", color: active ? "#fff" : "#888" }}>
-                  {count}
+      {/* ── Filtros de Status + Limpar Cache ────────────────────────────────── */}
+      <View style={{ flexDirection: "row", alignItems: "center" }}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: 20, gap: 8, marginBottom: 12, alignItems: "center" }}
+          style={{ maxHeight: 52, flex: 1 }}
+        >
+          {FILTROS.map((f) => {
+            const active = filtro === f.key;
+            const count = f.key === "todos" ? leadsCard.length : leadsCard.filter((l) => l.status === f.key).length;
+            return (
+              <TouchableOpacity
+                key={f.key}
+                onPress={() => setFiltro(f.key)}
+                style={{
+                  flexDirection: "row", alignItems: "center", gap: 6,
+                  paddingHorizontal: 16, paddingVertical: 8, borderRadius: 24,
+                  backgroundColor: active ? "#111" : "#fff",
+                  borderWidth: 1, borderColor: active ? "#111" : "#E0E0E0",
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={{ fontSize: 13, lineHeight: 18, fontWeight: "600", color: active ? "#fff" : "#555" }}>
+                  {f.label}
                 </Text>
-              </View>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
+                <View style={{ backgroundColor: active ? "rgba(255,255,255,0.2)" : "#F0F0F0", borderRadius: 10, paddingHorizontal: 6, paddingVertical: 1 }}>
+                  <Text style={{ fontSize: 11, lineHeight: 16, fontWeight: "700", color: active ? "#fff" : "#888" }}>
+                    {count}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+
+        <TouchableOpacity
+          onPress={handleLimparCache}
+          disabled={limpandoCache}
+          activeOpacity={0.75}
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 6,
+            backgroundColor: "#FFF0F0",
+            borderRadius: 20,
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+            marginRight: 20,
+            marginBottom: 12,
+          }}
+        >
+          {limpandoCache ? (
+            <ActivityIndicator size="small" color="#CC0000" />
+          ) : (
+            <Ionicons name="trash-outline" size={15} color="#CC0000" />
+          )}
+          <Text style={{ fontSize: 12.5, lineHeight: 17, fontWeight: "700", color: "#CC0000" }}>
+            {limpandoCache ? "Limpando..." : "Limpar"}
+          </Text>
+        </TouchableOpacity>
+      </View>
 
       {/* ── Lista de Leads ────────────────────────────────────────────────── */}
       {carregando ? (

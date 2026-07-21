@@ -159,7 +159,7 @@ export default function LoginScreen({
             </View>
           </View>
 
-          {/* ── Forgot password ── */}
+          {/* ── Forgot password ── 
           <TouchableOpacity
             onPress={onForgotPassword}
             className="self-end mb-6"
@@ -168,7 +168,7 @@ export default function LoginScreen({
               Esqueceu a senha?
             </Text>
           </TouchableOpacity>
-
+*/}
           {/* ✅ BOTÃO SSO */}
           <TouchableOpacity
             onPress={handleLogin}
@@ -188,7 +188,8 @@ export default function LoginScreen({
             )}
           </TouchableOpacity>
 
-          {/* ── Biometria (opcional) ── */}
+          
+          {/* ── Biometria (opcional) ── 
           <View className="flex-row gap-4">
             <TouchableOpacity
               onPress={onBiometrics}
@@ -205,14 +206,14 @@ export default function LoginScreen({
               <Ionicons name="scan-outline" size={26} color="#374151" />
               <Text className="text-xs text-gray-600">Face ID</Text>
             </TouchableOpacity>
-          </View>
+          </View>*/}
 
-          {/* ── Footer ── */}
+          {/* ── Footer 
           <View className="flex-row justify-center gap-2 mt-10">
             <Text className="text-[10px] text-gray-300 uppercase">
               IFS ERP • Secure • v2.4.1
             </Text>
-          </View>
+          </View>── */}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

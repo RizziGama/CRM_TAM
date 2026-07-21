@@ -3,9 +3,10 @@ import { View, ActivityIndicator } from "react-native";
 import LoginScreen from "@/components/LoginScreen";
 import AppMain from "@/components/AppMain";
 import SplashAnimado from "@/components/SplashAnimado";
+import OnboardingScreen, { jaViuOnboarding } from "@/components/OnboardingsSreen";
 import { getToken } from "@/components/azureAuth";
 
-type Stage = "splash" | "checking" | "login" | "app";
+type Stage = "splash" | "checking" | "login" | "onboarding" | "app";
 
 export default function Page() {
   const [stage, setStage] = useState<Stage>("splash");
@@ -16,7 +17,13 @@ export default function Page() {
 
     async function checkAuth() {
       const token = await getToken();
-      setStage(token ? "app" : "login");
+      if (!token) {
+        setStage("login");
+        return;
+      }
+
+      const visto = await jaViuOnboarding();
+      setStage(visto ? "app" : "onboarding");
     }
 
     checkAuth();
@@ -42,9 +49,16 @@ export default function Page() {
   if (stage === "login") {
     return (
       <LoginScreen
-        onLoginSuccess={() => setStage("app")}
+        onLoginSuccess={async () => {
+          const visto = await jaViuOnboarding();
+          setStage(visto ? "app" : "onboarding");
+        }}
       />
     );
+  }
+
+  if (stage === "onboarding") {
+    return <OnboardingScreen onFinish={() => setStage("app")} />;
   }
 
   return <AppMain onLogout={() => setStage("login")} />;

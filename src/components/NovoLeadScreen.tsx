@@ -778,9 +778,9 @@ export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "n
     cnpj: "",
     nomeEmpresa: "",
     nomeContato: "",
-    idioma: "",
+    idioma: "Portuguese (Brazil)",
     idiomaCodigo: "bp",
-    pais: "",
+    pais: "BRAZIL",
     paisCodigo: "BR",
     origem: "",
     origemCodigo: "", // "Indicação" no IFS -> Id30 (default de compatibilidade)
@@ -1143,9 +1143,9 @@ const abrirModalEventos = async () => {
             </Text>
           </View>
         </View>
-        <View style={{ backgroundColor: "#EBEBEB", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 }}>
+        {/*<View style={{ backgroundColor: "#EBEBEB", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 }}>
           <Text style={{ fontSize: 11, fontWeight: "700", color: "#555", letterSpacing: 1 }}>AUTO</Text>
-        </View>
+        </View>*/}
       </View>
 
       {/* ── Conteúdo ────────────────────────────────────────────────────── */}

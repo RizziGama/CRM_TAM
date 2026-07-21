@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from "react";
+import { Platform } from "react-native";
 import {
   View,
   Text,
@@ -65,15 +66,16 @@ function RadarSweep({ rotation }: { rotation: Animated.Value }) {
   });
 
   return (
-    <Animated.View style={[styles.sweepContainer, { transform: [{ rotate: spin }] }]}>
-      {/* Fatia triangular simulada com bordas */}
+    <Animated.View
+      style={[styles.sweepContainer, { transform: [{ rotate: spin }] }]}
+      renderToHardwareTextureAndroid={Platform.OS === "android"}
+      needsOffscreenAlphaCompositing={Platform.OS === "android"}
+    >
       <View style={styles.sweepSlice} />
-      {/* Linha principal do sweep */}
       <View style={styles.sweepLine} />
     </Animated.View>
   );
 }
-
 // ─── Tela Principal ───────────────────────────────────────────────────────────
 
 interface Props {
@@ -125,7 +127,8 @@ export default function SplashAnimado({ onFinish, duration = 3000 }: Props) {
 
       {/* ── Radar ──────────────────────────────────────────────────────── */}
       <Animated.View style={[styles.radarWrapper, { transform: [{ scale: radarScale }] }]}>
-        <View style={styles.radar}>
+        <View style={styles.radar}
+          renderToHardwareTextureAndroid={Platform.OS === "android"}>
 
           {/* Anéis concêntricos */}
           {RINGS.map((r, i) => (
@@ -194,7 +197,9 @@ const styles = StyleSheet.create({
   radar: {
     width:    RADAR_SIZE,
     height:   RADAR_SIZE,
-    position: "relative",
+    borderRadius: CENTER,
+    overflow:     "hidden",    // <- corta tudo que passar do círculo
+    position:     "relative"
   },
   ring: {
     position:    "absolute",

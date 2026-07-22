@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useState } from "react";
-import { Modal, Platform, Text, TouchableOpacity, View } from "react-native";
+import { Modal, Text, TouchableOpacity, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AgendaScreen from "./AgendaScreen";
 import DashboardScreen from "./DashboardScreen";
 import LeadsScreen from   "./LeadsScreen";
@@ -29,13 +30,21 @@ const TABS: {
 ];
 
 // ─── Bottom Tab Bar ───────────────────────────────────────────────────────────
+//
+// Antes, o paddingBottom era um valor fixo (Platform.OS === "ios" ? 20 : 0),
+// que ignorava a área segura real de cada aparelho. Isso deixava o texto das
+// abas colado na borda inferior em Android/tablets com barra de gestos.
+// Agora usamos o inset real (useSafeAreaInsets) — funciona corretamente em
+// qualquer dispositivo, com ou sem home indicator/gestos.
 
 function BottomTabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
+  const insets = useSafeAreaInsets();
+
   return (
     <View style={{
       flexDirection: "row", backgroundColor: "#fff",
       borderTopWidth: 1, borderTopColor: "#EBEBEB",
-      paddingBottom: Platform.OS === "ios" ? 20 : 0,
+      paddingBottom: insets.bottom,
       shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 8, elevation: 8,
     }}>
       {TABS.map((tab) => {
@@ -65,6 +74,7 @@ export default function AppMain({ onLogout }: AppMainProps) {
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
   const [leadEditando, setLeadEditando] = useState<LeadLocal | null>(null);
   const [userInfo, setUserInfo] = useState<AzureUserInfo | null>(null);
+  const insets = useSafeAreaInsets();
 
   // Carrega os dados reais do usuário Microsoft autenticado (nome, e-mail,
   // iniciais) para exibir no cabeçalho do Dashboard e no UserMenu.
@@ -123,8 +133,9 @@ export default function AppMain({ onLogout }: AppMainProps) {
       </View>
 
       {/* Avatar do usuário — fica visível em qualquer aba. Ao tocar, mostra
-          nome/e-mail reais do usuário logado e a opção de sair. */}
-      <View style={{ position: "absolute", top: Platform.OS === "ios" ? 54 : 28, right: 16 }}>
+          nome/e-mail reais do usuário logado e a opção de sair. Também usa
+          o inset real do topo em vez de um valor fixo por plataforma. */}
+      <View style={{ position: "absolute", top: insets.top + 10, right: 16 }}>
         <UserMenu onLogout={onLogout} size={36} />
       </View>
 

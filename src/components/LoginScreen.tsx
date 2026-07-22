@@ -3,7 +3,6 @@ import { useState } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   Text,
@@ -13,7 +12,7 @@ import {
   ActivityIndicator,
   Alert
 } from "react-native";
-
+import { SafeAreaView } from "react-native-safe-area-context";
 import { getUserInfo, loginAzure, logoutAzure } from "@/components/azureAuth";
 import { buscarExecutivoDeVendas, cacheExecutivo, clearExecutivoCache } from "@/components/ifsService";
 

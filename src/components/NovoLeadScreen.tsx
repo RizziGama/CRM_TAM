@@ -5,7 +5,6 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
-  SafeAreaView,
   StatusBar,
   KeyboardAvoidingView,
   Platform,
@@ -14,6 +13,7 @@ import {
   Modal,
   Pressable,
 } from "react-native";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
 
 import {
@@ -248,8 +248,9 @@ const LeadFormContent: React.FC<{
   onPressEvento: () => void;
   onPressMercado?: () => void;
   onPressSegmento?: () => void;
-}> = ({ data, setData, executivo, carregandoExecutivo, onPressIdioma, onPressPais, onPressOrigem, onPressMercado, onPressEvento }) => (
-  <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 120 }}>
+  bottomPadding: number;
+}> = ({ data, setData, executivo, carregandoExecutivo, onPressIdioma, onPressPais, onPressOrigem, onPressMercado, onPressEvento, bottomPadding }) => (
+  <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: bottomPadding }}>
     {/* Card principal */}
     <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: "#000", shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 }}>
 
@@ -773,6 +774,7 @@ const SeletorEventoModal: React.FC<{
 
 export default function NovoLeadScreen({ onClose, onSave, initialData, mode = "novo" }: Props) {
   const isEditing = mode === "editar";
+  const insets = useSafeAreaInsets();
   const [saving, setSaving] = useState(false);
   const [data, setDataState] = useState<LeadData>({
     cnpj: "",
@@ -1118,8 +1120,15 @@ const abrirModalEventos = async () => {
     }
   };
 
+  // Altura aproximada do footer (botões + paddings internos), usada para
+  // reservar espaço no final do ScrollView e não deixar o conteúdo
+  // escondido atrás do footer absoluto.
+  const FOOTER_CONTENT_HEIGHT = 76; // altura dos botões + paddingTop do footer
+  const footerBottomPadding = insets.bottom + 12;
+  const scrollBottomPadding = FOOTER_CONTENT_HEIGHT + footerBottomPadding + 24;
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#F4F4F6" }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#F4F4F6" }} edges={["top", "left", "right"]}>
       <StatusBar barStyle="dark-content" backgroundColor="#F4F4F6" />
 
       {/* ── Header ──────────────────────────────────────────────────────── */}
@@ -1160,6 +1169,7 @@ const abrirModalEventos = async () => {
           onPressOrigem={abrirModalOrigens}
           onPressEvento={abrirModalEventos} 
           onPressMercado={abrirModalMercados}
+          bottomPadding={scrollBottomPadding}
         />
       </KeyboardAvoidingView>
 
@@ -1167,7 +1177,7 @@ const abrirModalEventos = async () => {
       <View style={{
         position: "absolute", bottom: 0, left: 0, right: 0,
         flexDirection: "row", alignItems: "center", gap: 10,
-        paddingHorizontal: 16, paddingBottom: Platform.OS === "ios" ? 32 : 16, paddingTop: 12,
+        paddingHorizontal: 16, paddingBottom: footerBottomPadding, paddingTop: 12,
         backgroundColor: "#F4F4F6",
         borderTopWidth: 1, borderTopColor: "#EBEBEB",
       }}>
@@ -1202,7 +1212,6 @@ const abrirModalEventos = async () => {
           style={{
             flex: 1.4, height: 52, borderRadius: 28, backgroundColor: "#CC0000",
             flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-            shadowColor: "#CC0000", shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 5,
             opacity: saving ? 0.8 : 1,
           }}
           activeOpacity={0.85}

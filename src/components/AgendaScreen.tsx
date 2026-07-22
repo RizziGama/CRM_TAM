@@ -665,7 +665,7 @@ export default function AgendaScreen() {
   };
 
   return (
-    <SafeAreaView style={{ flex:1, backgroundColor:"#111" }}>
+    <SafeAreaView style={{ flex:1, backgroundColor:"#111" }} edges={['top']}>
       <StatusBar barStyle="light-content" backgroundColor="#111" />
 
       {/* Modais de lead */}
